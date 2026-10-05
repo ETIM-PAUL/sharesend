@@ -1,0 +1,23 @@
+# Render Blueprint for the agent service.
+# Region must be outside the Binance Web3 API's prohibited regions (no US/UK/CA/NL/JP) -> Frankfurt.
+services:
+  - type: web
+    name: sharesend-agent
+    runtime: docker
+    region: frankfurt
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: LIVE_TRADING
+        value: "false"
+      - key: BINANCE_BASE_URL
+        value: https://web3.binance.com/build
+      - key: B402_NETWORK
+        value: eip155:56
+      # Secrets: entered by hand in the Render dashboard, never committed.
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false

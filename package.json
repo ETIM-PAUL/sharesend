@@ -3,14 +3,20 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "ping": "tsx agent/cli/ping.ts"
+    "ping": "tsx agent/cli/ping.ts",
+    "dev": "tsx watch agent/index.ts",
+    "start": "tsx agent/index.ts"
   },
   "dependencies": {
+    "@hono/node-server": "^2.1.3",
     "dotenv": "^16.4.5",
+    "hono": "^4.13.13",
     "viem": "^2.21.0"
   },
   "devDependencies": {
