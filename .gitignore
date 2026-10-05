@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+.next/
+*.db
+*.db-journal
+.DS_Store
+out/
+cache/
+BUILD_PLAN.md
