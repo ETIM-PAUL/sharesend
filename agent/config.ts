@@ -1,0 +1,24 @@
+import "dotenv/config";
+
+function required(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing env var ${name}`);
+  return v;
+}
+
+function num(name: string, fallback: number): number {
+  const v = Number(process.env[name] ?? fallback);
+  if (!Number.isFinite(v)) throw new Error(`Env var ${name} is not a number`);
+  return v;
+}
+
+// Secrets are read lazily via getters so importing config never throws or leaks them.
+export const config = {
+  get binanceApiKey() { return required("BINANCE_API_KEY"); },
+  get binanceApiSecret() { return required("BINANCE_API_SECRET"); },
+  binanceBaseUrl: process.env.BINANCE_BASE_URL ?? "https://web3.binance.com/build",
+  b402Network: process.env.B402_NETWORK ?? "eip155:56",
+  liveTrading: process.env.LIVE_TRADING === "true",
+  maxGiftUsd: num("MAX_GIFT_USD", 20),
+  dailyCapUsd: num("DAILY_CAP_USD", 50),
+};

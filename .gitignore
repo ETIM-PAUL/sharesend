@@ -10,3 +10,4 @@ dist/
 out/
 cache/
 BUILD_PLAN.md
+.agents/

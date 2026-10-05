@@ -1,10 +1,22 @@
 {
-  "name": "clearinghouse",
+  "name": "sharesend",
   "private": true,
   "version": "0.0.1",
   "type": "module",
   "engines": { "node": ">=20" },
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "ping": "tsx agent/cli/ping.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
   }
 }
