@@ -46,22 +46,19 @@ async function once<T>(method: "GET" | "POST", path: string, opts: RequestOpts):
   const url = base.origin + requestPath + (qs.size ? `?${qs}` : "");
   const body = opts.body === undefined ? "" : JSON.stringify(opts.body);
   const timestamp = new Date().toISOString();
+  // Built before the fetch so a missing key surfaces as a config error, not a network error.
+  const headers = {
+    "Content-Type": "application/json",
+    "X-OC-APIKEY": config.binanceApiKey,
+    "X-OC-TIMESTAMP": timestamp,
+    "X-OC-SIGN": sign(config.binanceApiSecret, timestamp, method, requestPath, body),
+  };
 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 8000);
   let res: Response;
   try {
-    res = await fetch(url, {
-      method,
-      body: body || undefined,
-      signal: ctrl.signal,
-      headers: {
-        "Content-Type": "application/json",
-        "X-OC-APIKEY": config.binanceApiKey,
-        "X-OC-TIMESTAMP": timestamp,
-        "X-OC-SIGN": sign(config.binanceApiSecret, timestamp, method, requestPath, body),
-      },
-    });
+    res = await fetch(url, { method, body: body || undefined, signal: ctrl.signal, headers });
   } catch (e) {
     if ((e as Error).name === "AbortError") throw new BinanceError(`Timeout calling ${path}`, "timeout");
     throw new BinanceError(`Network error calling ${path}: ${(e as Error).message}`, "network");
