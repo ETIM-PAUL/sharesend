@@ -3,7 +3,7 @@
 Format: time | page/endpoint | expected | happened | time lost
 
 ## Milestones
-- Docs first opened: _TODO (fill in when you open them)_
+- Docs first opened: true
 - First successful authenticated API call: 2026-10-05 21:50 UTC — `POST /build/api/v2/b402/supported`, from Paul's machine. From the hosted agent service (Railway, Singapore, egress 208.77.246.55): 2026-10-05 23:09 UTC
 
 ## Friction (from builder chat, Sep 16 – Oct 5; peer reports, not verified by us)
@@ -27,3 +27,10 @@ Format: time | page/endpoint | expected | happened | time lost
 - 2026-10-05 21:45 UTC | B402 `/supported` request format | plain JSON body | must wrap as `{"body": {}}` and sign that exact string; requestPath includes `/build`, excludes query string; B402 success code is `000000000` (9 zeros) vs `000000` on data APIs | -
 - 2026-10-05 21:50 UTC | B402 `/supported` response | — | USDT and USDC on BSC: permit2 only (no eip3009); United Stables (U) and USD1: eip3009 + permit2. One-signature, no-approval payments only possible with U or USD1 | -
 - 2026-10-05 23:07 UTC | `POST /build/api/v2/b402/supported` from Railway US West (egress 152.55.176.8, Santa Clara, US) | 40304 per prohibited-regions page (US blocked server-side) | call succeeded (HTTP 200). Geo check apparently not applied to this endpoint, or not consistently; other teams report 40304 from US hosts on RWA/quote endpoints | -
+- 2026-10-06 ~00:10 UTC | RWA Data endpoint docs | parameter tables for /rwa/tokens etc. | Market API intro lists endpoints but per-endpoint pages are JS-only; params found by trial (binanceChainId) | ~15 min
+- 2026-10-06 ~00:15 UTC | GET signing with query string | auth doc / B402 guide imply query excluded from signed path | GET /rwa/tokens?binanceChainId=56 signed without query → 40102 "Invalid signature"; must sign path+query. B402 guide statement misleading for GET | ~10 min
+- 2026-10-06 ~00:20 UTC | RWA platforms | bStocks, Ondo, xStocks (hackathon page names all three) | `/rwa/platforms` returns only `ondo` and `bstock`; xStocks absent on BSC via this API | -
+- 2026-10-06 ~00:25 UTC | `/rwa/tokens` tokenPrice vs referencePrice | on-chain market price vs reference | tokenPrice ÷ tokenToShareRatio == referencePrice exactly for 488/488 tokens; "premium" always 0. tokenPrice is not a market price; must use swap quotes | ~10 min
+- 2026-10-06 ~00:30 UTC | BscScan source pages | read verified source | HTTP 403 to automated fetch; used `cast selectors --resolve` on bytecode instead | ~5 min
+- 2026-10-06 ~00:45 UTC | `baw market-order quote` USDT→Ondo token, $1 | quote | `315008 SERVICE_ERROR "From token value greater than 5 USD"`; $5.00 works, so min is ≥ $5 and message wording is inverted. Not documented in skill references. bStocks $1 works | ~5 min
+- 2026-10-06 ~00:50 UTC | bStocks token interface | standard ERC-20 balances | `uiMultiplier` / `balanceOfUI` / `toUIAmount`: displayed balance ≠ raw balanceOf | -

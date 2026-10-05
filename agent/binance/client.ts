@@ -4,7 +4,7 @@ import { BinanceError } from "./errors.js";
 
 // Signing per https://web3.binance.com/en/dev-docs/authentication:
 // X-OC-SIGN = base64(HMAC-SHA256(timestamp + METHOD + requestPath + body)).
-// requestPath includes the /build prefix and excludes the query string (per the B402 integration guide).
+// requestPath includes the /build prefix and the query string (if any).
 export function sign(secret: string, timestamp: string, method: string, requestPath: string, body: string): string {
   return createHmac("sha256", secret).update(timestamp + method + requestPath + body).digest("base64");
 }
@@ -40,10 +40,11 @@ export async function request<T>(method: "GET" | "POST", path: string, opts: Req
 
 async function once<T>(method: "GET" | "POST", path: string, opts: RequestOpts): Promise<ApiResult<T>> {
   const base = new URL(config.binanceBaseUrl);
-  const requestPath = base.pathname.replace(/\/$/, "") + path;
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(opts.query ?? {})) if (v !== undefined) qs.set(k, String(v));
-  const url = base.origin + requestPath + (qs.size ? `?${qs}` : "");
+  // The signed path includes the query string: GET calls signed without it return 40102 "Invalid signature".
+  const requestPath = base.pathname.replace(/\/$/, "") + path + (qs.size ? `?${qs}` : "");
+  const url = base.origin + requestPath;
   const body = opts.body === undefined ? "" : JSON.stringify(opts.body);
   const timestamp = new Date().toISOString();
   // Built before the fetch so a missing key surfaces as a config error, not a network error.
