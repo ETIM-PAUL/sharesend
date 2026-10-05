@@ -4,7 +4,7 @@ Format: time | page/endpoint | expected | happened | time lost
 
 ## Milestones
 - Docs first opened: _TODO (fill in when you open them)_
-- First successful authenticated API call: 2026-10-05 21:50 UTC — `POST /build/api/v2/b402/supported`, from Paul's machine (not yet from the hosted agent service)
+- First successful authenticated API call: 2026-10-05 21:50 UTC — `POST /build/api/v2/b402/supported`, from Paul's machine. From the hosted agent service (Railway, Singapore, egress 208.77.246.55): 2026-10-05 23:09 UTC
 
 ## Friction (from builder chat, Sep 16 – Oct 5; peer reports, not verified by us)
 - 2026-10-05 13:59 UTC | RWA underlying-market API | documented marketStatus enum | returns "offhours" with openState=true, reasonCode=TRADING; value not in docs | unverified
@@ -26,3 +26,4 @@ Format: time | page/endpoint | expected | happened | time lost
 - 2026-10-05 21:30 UTC | prohibited-regions page | — | explains 40304: IP checks on API server side; US, UK, CA, NL, JP(conditional) blocked. Not mentioned on the error itself or in the auth page | -
 - 2026-10-05 21:45 UTC | B402 `/supported` request format | plain JSON body | must wrap as `{"body": {}}` and sign that exact string; requestPath includes `/build`, excludes query string; B402 success code is `000000000` (9 zeros) vs `000000` on data APIs | -
 - 2026-10-05 21:50 UTC | B402 `/supported` response | — | USDT and USDC on BSC: permit2 only (no eip3009); United Stables (U) and USD1: eip3009 + permit2. One-signature, no-approval payments only possible with U or USD1 | -
+- 2026-10-05 23:07 UTC | `POST /build/api/v2/b402/supported` from Railway US West (egress 152.55.176.8, Santa Clara, US) | 40304 per prohibited-regions page (US blocked server-side) | call succeeded (HTTP 200). Geo check apparently not applied to this endpoint, or not consistently; other teams report 40304 from US hosts on RWA/quote endpoints | -
