@@ -24,6 +24,7 @@ export const config = {
   // RWA quotes need a userWalletAddress; quotes are taken as the Agentic Wallet (the buyer).
   agenticWalletAddress: process.env.AGENTIC_WALLET_ADDRESS ?? "",
   serviceFeeUsd: num("SERVICE_FEE_USD", 0.1),
+  giftExpiryDays: num("GIFT_EXPIRY_DAYS", 30),
   quoteTtlSeconds: num("QUOTE_TTL_SECONDS", 60),
   maxPriceImpactPct: num("MAX_PRICE_IMPACT_PCT", 1.5),
   weekendWarnPct: num("WEEKEND_WARN_PCT", 1.0),
