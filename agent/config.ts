@@ -21,4 +21,9 @@ export const config = {
   liveTrading: process.env.LIVE_TRADING === "true",
   maxGiftUsd: num("MAX_GIFT_USD", 20),
   dailyCapUsd: num("DAILY_CAP_USD", 50),
+  // RWA quotes need a userWalletAddress; quotes are taken as the Agentic Wallet (the buyer).
+  agenticWalletAddress: process.env.AGENTIC_WALLET_ADDRESS ?? "",
+  quoteTtlSeconds: num("QUOTE_TTL_SECONDS", 60),
+  maxPriceImpactPct: num("MAX_PRICE_IMPACT_PCT", 1.5),
+  weekendWarnPct: num("WEEKEND_WARN_PCT", 1.0),
 };

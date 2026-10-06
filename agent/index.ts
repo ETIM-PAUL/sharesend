@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { request } from "./binance/client.js";
 import { BinanceError } from "./binance/errors.js";
+import { quoteTicker } from "./pricing/quote.js";
 
 const app = new Hono();
 
@@ -20,6 +21,19 @@ app.get("/ping-binance", async (c) => {
   } catch (e) {
     const err = e instanceof BinanceError ? { kind: e.kind, status: e.status, code: e.code, message: e.message } : { kind: "config", message: (e as Error).message };
     return c.json({ ok: false, startedAt, region, error: err }, 502);
+  }
+});
+
+// Phase 3: issuer options for a ticker and USD amount, normalized to price per real share. Read-only.
+app.get("/quote", async (c) => {
+  const ticker = c.req.query("ticker") ?? "";
+  const usd = Number(c.req.query("usd"));
+  if (!/^[A-Za-z.]{1,10}$/.test(ticker) || !(usd > 0) || usd > 1000) return c.json({ ok: false, error: "ticker and usd (0 < usd ≤ 1000) required" }, 400);
+  try {
+    return c.json({ ok: true, region, ...(await quoteTicker(ticker, usd)) });
+  } catch (e) {
+    const err = e instanceof BinanceError ? { kind: e.kind, status: e.status, code: e.code, message: e.message } : { kind: "input", message: (e as Error).message };
+    return c.json({ ok: false, region, error: err }, e instanceof BinanceError ? 502 : 400);
   }
 });
 

@@ -10,6 +10,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "ping": "tsx agent/cli/ping.ts",
+    "cli": "tsx agent/cli/index.ts",
     "dev": "tsx watch agent/index.ts",
     "start": "tsx agent/index.ts"
   },
