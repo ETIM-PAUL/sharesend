@@ -65,7 +65,7 @@ In `GET /api/v1/dex/market/rwa/tokens`, `tokenPrice ÷ tokenToShareRatio` equals
 
 bStocks also has a UI multiplier (`uiMultiplier`, `balanceOfUI`, `toUIAmount`): the displayed balance differs from the raw ERC-20 balance by the tokens-per-share ratio. Show recipients the UI amount (or shares), not the raw balance.
 
-## Still to prove (needs ~$3 of mainnet funds, with Paul's approval)
+## Still to prove (needs ~$3 of mainnet funds)
 
 1. Agentic Wallet buys $1 of a bStocks token (`baw market-order swap`), e.g. NVDAB.
 2. Agentic Wallet sends it to the vault (`baw wallet send`), proving the address-book entry. Check `baw wallet tx-lock` for phone confirmations.

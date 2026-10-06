@@ -1,8 +1,8 @@
-// Runs against a real Postgres: TEST_DATABASE_URL (its public schema is wiped). Skipped if unset.
+// Runs against a real Postgres: TEST_DATABASE_URL (uses and wipes schema test_ledger). Skipped if unset.
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDb, type Db } from "../db/pool.js";
-import { migrate } from "../db/migrate.js";
+import type { Db } from "../db/pool.js";
+import { freshTestDb } from "../db/testDb.js";
 import {
   advanceStep,
   beginClaim,
@@ -48,9 +48,7 @@ describe.skipIf(!url)("gift ledger (Postgres)", () => {
   let db: Db;
 
   beforeAll(async () => {
-    db = createDb(url!, 30);
-    await db.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public");
-    await migrate(db);
+    db = await freshTestDb(url!, "test_ledger", 30);
   });
   afterAll(async () => {
     await db?.end();
@@ -269,7 +267,7 @@ describe.skipIf(!url)("gift ledger (Postgres)", () => {
 
   describe("reconciliation", () => {
     it("compares vault holdings per token with unclaimed gifts", async () => {
-      await db.query("TRUNCATE gifts, gift_events, claim_attempts");
+      await db.query("TRUNCATE gifts, gift_events, claim_attempts CASCADE");
       await readyGift({}, 100n);
       await readyGift({}, 50n);
       const claiming = await readyGift({}, 7n);

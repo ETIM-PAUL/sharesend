@@ -5,6 +5,7 @@ import { fetchTickerOptions, limitsFromConfig, type IssuerOption } from "../pric
 import { buildQuote, checkCaps } from "../pricing/picker.js";
 import { searchTickers } from "../binance/rwa.js";
 import { BinanceError } from "../binance/errors.js";
+import { giftCommand } from "./gift.js";
 
 const fmtUsd = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtPct = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
@@ -56,8 +57,8 @@ async function main() {
     const q = args.join(" ");
     if (!q) throw new Error("usage: npm run cli -- search <text>");
     for (const r of (await searchTickers(q)).slice(0, 15)) console.log(`${r.ticker.padEnd(8)} ${r.name}  [${r.issuers.join(", ")}]`);
-  } else {
-    throw new Error("commands: quote <TICKER> <USD> | search <text>");
+  } else if (!(await giftCommand(cmd ?? "", args))) {
+    throw new Error("commands: quote <TICKER> <USD> | search <text> | dryrun <TICKER> <USD> | live-gift <TICKER> <USD> --confirm | resume <giftId> | show <giftId>");
   }
 }
 

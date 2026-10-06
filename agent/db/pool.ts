@@ -16,8 +16,9 @@ export function getDb(): Db {
   return pool;
 }
 
-export function createDb(connectionString: string, max = 10): Db {
-  const p = new pg.Pool({ connectionString, max });
+export function createDb(connectionString: string, max = 10, schema?: string): Db {
+  if (schema && !/^[a-z_][a-z0-9_]*$/.test(schema)) throw new Error("invalid schema name");
+  const p = new pg.Pool({ connectionString, max, ...(schema ? { options: `-c search_path=${schema}` } : {}) });
   // An idle client erroring (e.g. the server restarted) must not crash the process.
   p.on("error", (e) => console.error("postgres pool error:", e.message));
   return p;

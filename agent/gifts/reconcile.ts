@@ -26,7 +26,7 @@ export async function liabilities(db: Queryable): Promise<Liability[]> {
   const { rows } = await db.query<{ token_address: string; ticker: string; gifts: string; amount: string }>(
     `SELECT lower(token_address) AS token_address, min(ticker) AS ticker, count(*) AS gifts, sum(token_amount) AS amount
      FROM gifts
-     WHERE token_amount IS NOT NULL
+     WHERE token_amount IS NOT NULL AND NOT dry_run
        AND (status = ANY($1) OR (status = 'BUYING' AND step = 'in_vault'))
      GROUP BY lower(token_address)
      ORDER BY 1`,

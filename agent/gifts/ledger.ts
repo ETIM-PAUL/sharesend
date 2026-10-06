@@ -38,6 +38,8 @@ export interface Gift {
   claimExpiresAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  /** Created with LIVE_TRADING=false: synthetic tx hashes, excluded from caps and reconciliation. */
+  dryRun: boolean;
 }
 
 // ---- Errors ----
@@ -103,6 +105,7 @@ function toGift(r: any): Gift {
     claimExpiresAt: r.claim_expires_at,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    dryRun: r.dry_run,
   };
 }
 
@@ -122,6 +125,7 @@ export interface NewGift {
   feeUsd: number;
   quoteId?: string;
   paymentExpiresAt: Date;
+  dryRun?: boolean;
 }
 
 export interface GiftCaps {
@@ -141,7 +145,7 @@ export async function dailyUsedUsd(db: Queryable): Promise<number> {
   const { rows } = await db.query<{ used: string }>(
     `SELECT coalesce(sum(usd_cost), 0) AS used FROM gifts
      WHERE created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-       AND status NOT IN ('EXPIRED', 'REFUNDED')`,
+       AND status NOT IN ('EXPIRED', 'REFUNDED') AND NOT dry_run`,
   );
   return Number(rows[0]!.used);
 }
@@ -166,13 +170,13 @@ export async function createGift(db: Db, input: NewGift, caps: GiftCaps): Promis
   return withTx(db, async (c) => {
     await c.query("SELECT pg_advisory_xact_lock(hashtext('sharesend:daily-cap'))");
     const used = await dailyUsedUsd(c);
-    if (used + input.usdCost > caps.dailyCapUsd)
+    if (!input.dryRun && used + input.usdCost > caps.dailyCapUsd)
       throw new CapExceededError("OVER_DAILY_CAP", `Daily limit reached: $${Math.max(0, caps.dailyCapUsd - used).toFixed(2)} of $${caps.dailyCapUsd} left today`);
 
     const { rows } = await c.query(
       `INSERT INTO gifts (id, status, sender_address, sender_name, recipient_name, message, ticker, issuer,
-         token_address, token_decimals, quoted_token_amount, usd_cost, fee_usd, quote_id, claim_code_hash, payment_expires_at)
-       VALUES ($1, 'AWAITING_PAYMENT', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+         token_address, token_decimals, quoted_token_amount, usd_cost, fee_usd, quote_id, claim_code_hash, payment_expires_at, dry_run)
+       VALUES ($1, 'AWAITING_PAYMENT', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        RETURNING *`,
       [
         randomUUID(),
@@ -190,6 +194,7 @@ export async function createGift(db: Db, input: NewGift, caps: GiftCaps): Promis
         input.quoteId ?? null,
         hashClaimCode(claimCode),
         input.paymentExpiresAt,
+        input.dryRun ?? false,
       ],
     );
     const gift = toGift(rows[0]);
@@ -313,6 +318,25 @@ export async function advanceStep(db: Db, id: string, from: BuyStep | null, to: 
     await c.query("INSERT INTO gift_events (gift_id, from_status, to_status, step) VALUES ($1, 'BUYING', 'BUYING', $2)", [id, to]);
     return toGift(rows[0]);
   });
+}
+
+type TxField = "paymentTx" | "forwardTx" | "buyTx" | "vaultTx" | "claimTx" | "returnTx" | "refundTx";
+
+/**
+ * Records a tx hash without changing status (e.g. the claim tx right before broadcast, which blocks
+ * releaseClaim from then on). Idempotent for the same hash; refuses to overwrite a different one.
+ */
+export async function recordTx(db: Queryable, id: string, status: GiftStatus, field: TxField, hash: string): Promise<void> {
+  const col = PATCH_COLUMNS[field];
+  const { rowCount } = await db.query(
+    `UPDATE gifts SET ${col} = $3, updated_at = now() WHERE id = $1 AND status = $2 AND (${col} IS NULL OR ${col} = $3)`,
+    [id, status, hash],
+  );
+  if (!rowCount) {
+    const cur = await db.query<{ status: string }>("SELECT status FROM gifts WHERE id = $1", [id]);
+    if (!cur.rows[0]) throw new GiftNotFoundError(id);
+    throw new StaleStateError(`${status} with ${field} unset or equal`, cur.rows[0].status);
+  }
 }
 
 // ---- Claims ----

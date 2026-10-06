@@ -1,24 +1,27 @@
-# DX log (raw notes — Paul writes the final DX report himself)
+# DX log (raw notes)
 
 Format: time | page/endpoint | expected | happened | time lost
 
 ## Milestones
-- Docs first opened: true
-- First successful authenticated API call: 2026-10-05 21:50 UTC — `POST /build/api/v2/b402/supported`, from Paul's machine. From the hosted agent service (Railway, Singapore, egress 208.77.246.55): 2026-10-05 23:09 UTC
 
-## Friction (from builder chat, Sep 16 – Oct 5; peer reports, not verified by us)
+- Docs first opened: true
+- First successful authenticated API call: 2026-10-05 21:50 UTC — `POST /build/api/v2/b402/supported`, from my machine. From the hosted agent service (Railway, Singapore, egress 208.77.246.55): 2026-10-05 23:09 UTC
+
+## I first of all read through the Telegram builder chat for any Friction (from builder chat, Sep 16 – Oct 5; peer reports, not verified by us)
+
 - 2026-10-05 13:59 UTC | RWA underlying-market API | documented marketStatus enum | returns "offhours" with openState=true, reasonCode=TRADING; value not in docs | unverified
 - 2026-10-05 13:59 UTC | /quote -> /swap for NVDAon | RFQ per API reference | LiquidMesh route, executionMode=SWAP reported | unverified
 - 2026-10-05 13:59 UTC | any signed call from hosted server | works as from dev machine | 40304 "compliance restriction" from serverless/US datacenter IPs; dev machine OK | unverified, unanswered by organizers
 - 2026-10-05 13:59 UTC | B402 credential form | open application | "you need permission" reported | unverified
 - 2026-10-05 13:59 UTC | dev portal on mobile | create-key button | not visible; desktop only | unverified
 
-## Our own log
+## Tested for this frictions - My own log
+
 - 2026-10-05 14:13 UTC | Binance B402 docs (basics/4.base-urls) | sandbox base URL | page says "Contact Binance for access"; no URL, no timeline for credentials | -
 - 2026-10-05 14:13 UTC | Binance B402 apply form | credentials delivery info | form has no confirmation of method/timeline; docs say clientId + accessToken + webhook pubkey, RSA-signed, source-IP whitelisting | -
-- 2026-10-05 14:13 UTC | docs.b402.ai facilitator health-check | GET /health returns {status:ok} | GET https://facilitatorv3.b402.ai/health returned 404 "Route not found" (host taken from authentication page) | ~5 min
+- 2026-10-05 14:13 UTC | docs.b402.ai facilitator health-check | GET /health returns {status:ok} | GET [https://facilitatorv3.b402.ai/health](https://facilitatorv3.b402.ai/health) returned 404 "Route not found" (host taken from authentication page) | ~5 min
 - 2026-10-05 14:13 UTC | two B402 doc sets | one clear path | Binance developers.binance.com (clientId/RSA/whitelist) and docs.b402.ai (no keys needed) describe different auth models; unclear how they relate | -
-- 2026-10-05 14:22 UTC | docs: three B402 doc sets (developers.binance.com/onchainpay-x402, docs.b402.ai, web3.binance.com/en/dev-docs/products/b402-api) | one canonical guide | contradictory: first says clientId+RSA+"contact Binance" for base URL, third says same API key w/ B402 permission, base https://web3.binance.com/build, HMAC signing. Third appears current | ~30 min
+- 2026-10-05 14:22 UTC | docs: three B402 doc sets (developers.binance.com/onchainpay-x402, docs.b402.ai, web3.binance.com/en/dev-docs/products/b402-api) | one canonical guide | contradictory: first says clientId+RSA+"contact Binance" for base URL, third says same API key w/ B402 permission, base [https://web3.binance.com/build](https://web3.binance.com/build), HMAC signing. Third appears current | ~30 min
 - 2026-10-05 15:10 UTC | Agentic Wallet sign-in | "type confirm in agent" per app | app message tells user to return to the agent and type confirm; actual flow is auth signin -> auth verify blocking; unclear to a human that the agent (not the user) must run verify | ~10 min
 - 2026-10-05 ~20:00 UTC | Agentic Wallet `wallet send` (skill references/send.md) | send to any address | recipient must be in the address book, added by hand in the Binance App; agent can't pay out to addresses learned at runtime. Forced a two-wallet redesign (vault) | ~1 h incl. redesign
 - 2026-10-05 ~20:00 UTC | Agentic Wallet sessions (`baw wallet settings`) | session lasts through a long-running service | 48 h inactivity sign-out, hard cutoff (signInMaxTime) ~7 days after sign-in; re-sign needs the phone. Judging window (Oct 12–23) is longer than one session | -
@@ -40,3 +43,13 @@ Format: time | page/endpoint | expected | happened | time lost
 - 2026-10-06 ~00:00 UTC | `/aggregator/quote` RWA | userWalletAddress optional per general docs | required for RWA tokens; without it the quote is rejected | -
 - 2026-10-06 00:02 UTC | Ondo quote during session change | statusInfo says closed → clear reason | 40367 "The stock market is shifting its trading phase. Expected to open in 0d 0h 2m." Ondo pauses ~00:00–00:05 UTC daily ("Paused for session transition"); bStocks kept quoting through it. New error code, not in the error-code list I've seen | -
 - 2026-10-06 00:02 UTC | referencePrice per issuer | one reference price per underlying | NVDA ref differs by issuer at the same moment (bStocks $240.05 vs Ondo $240.36 a few min earlier); each issuer has its own reference feed, so "premium vs reference" is per-issuer | -
+
+- 2026-10-06 ~19:30 UTC | `baw wallet settings` | session lasts to the hard cutoff noted at sign-in (~Oct 12) | now shows maxSigninDuration "48h" and sessionExpireTime 2026-10-08 19:32 UTC (same as inactiveSignOutTime). Re-sign-in needed every 2 days, not once a week; judging (Oct 12–23) needs ~6 sign-ins with Paul's phone | -
+- 2026-10-06 ~19:30 UTC | skill vs CLI version | one version | installed skill metadata says version 1.12.0 / requiredCliVersion 1.10.0; CLI 1.10.0. Skill references can change without a CLI update | -
+- 2026-10-06 ~19:35 UTC | `baw market-order list` response | received amount for a finished swap | list entries have fromTokenQty and txHash but no toToken amount; the amount actually received has to be read from the swap tx's Transfer logs on-chain | -
+- 2026-10-06 ~19:35 UTC | `baw market-order quote` USDT→NVDAB vs NVDAB→USDT | buy-only for stock tokens? | selling a stock token back to USDT quotes fine (0.001 NVDAB → 0.2398 USDT); no doc says either way | -
+- 2026-10-06 ~19:35 UTC | `baw wallet send --amount` (human units) with bStocks | clear unit semantics | bStocks tokens expose uiMultiplier / balanceOfUI; docs don't say whether `--amount` is raw-decimals or UI units for these tokens. Pipeline verifies what arrives at the vault on-chain; to confirm in the first live run | -
+- 2026-10-06 ~19:40 UTC | Transaction API `/pre-transaction/simulate` | balance changes for both sides of a transfer | `balanceChanges` lists only the sender's change (e.g. -1e18 USDT for the sender), not the recipient's. Status values seen: "SUCCESS", "FAILED" with failReason "execution reverted: BEP20: transfer amount exceeds balance" | -
+- 2026-10-06 ~19:40 UTC | `baw wallet tx-lock` | parallel sends | one pending tx at a time per wallet (LOCKED until confirmed or double-confirm resolved): buys through the Agentic Wallet have to run one after another | -
+- 2026-10-06 ~19:45 UTC | `baw` errors | consistent machine-readable errors | API errors are JSON `{success:false,error:{code,name,message}}` with exit 1, but CLI usage errors (unknown command) are plain text on stderr with exit 0 | -
+- 2026-10-06 ~19:45 UTC | `baw` session storage | documented location for servers | session lives in `~/.baw` (found by looking, not documented). Running baw on a host like Railway needs a persistent volume there, and sign-in (QR) has to be driven from the server | -
