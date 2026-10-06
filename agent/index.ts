@@ -2,7 +2,7 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { request } from "./binance/client.js";
 import { BinanceError } from "./binance/errors.js";
-import { quoteTicker } from "./pricing/quote.js";
+import { fetchTickerOptions, quoteGift } from "./pricing/quote.js";
 
 const app = new Hono();
 
@@ -24,13 +24,27 @@ app.get("/ping-binance", async (c) => {
   }
 });
 
-// Phase 3: issuer options for a ticker and USD amount, normalized to price per real share. Read-only.
+// Gift quote: the picked issuer, cost, fee, reason and warnings. Read-only; caps checked before any Binance call.
 app.get("/quote", async (c) => {
+  const ticker = c.req.query("ticker") ?? "";
+  const usd = Number(c.req.query("usd"));
+  if (!/^[A-Za-z.]{1,10}$/.test(ticker) || !Number.isFinite(usd)) return c.json({ ok: false, error: "ticker and usd required" }, 400);
+  try {
+    const r = await quoteGift(ticker, usd);
+    return c.json({ region, ...r }, r.ok || r.code === "NO_ISSUER" ? 200 : 422);
+  } catch (e) {
+    const err = e instanceof BinanceError ? { kind: e.kind, status: e.status, code: e.code, message: e.message } : { kind: "input", message: (e as Error).message };
+    return c.json({ ok: false, region, error: err }, e instanceof BinanceError ? 502 : 400);
+  }
+});
+
+// Raw per-issuer options (Phase 3 data view), for debugging the picker.
+app.get("/quote/options", async (c) => {
   const ticker = c.req.query("ticker") ?? "";
   const usd = Number(c.req.query("usd"));
   if (!/^[A-Za-z.]{1,10}$/.test(ticker) || !(usd > 0) || usd > 1000) return c.json({ ok: false, error: "ticker and usd (0 < usd ≤ 1000) required" }, 400);
   try {
-    return c.json({ ok: true, region, ...(await quoteTicker(ticker, usd)) });
+    return c.json({ ok: true, region, ...(await fetchTickerOptions(ticker, usd)) });
   } catch (e) {
     const err = e instanceof BinanceError ? { kind: e.kind, status: e.status, code: e.code, message: e.message } : { kind: "input", message: (e as Error).message };
     return c.json({ ok: false, region, error: err }, e instanceof BinanceError ? 502 : 400);
