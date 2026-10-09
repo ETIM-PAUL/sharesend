@@ -5,7 +5,7 @@ import { formatUnits, parseUnits } from "viem";
 import { config } from "../config.js";
 import { USDT_BSC } from "../binance/constants.js";
 import { BinanceError } from "../binance/errors.js";
-import { isTradableNow, tokensForTicker, type Issuer, type RwaStatus, type RwaToken } from "../binance/rwa.js";
+import { displayName, isTradableNow, tokensForTicker, type Issuer, type RwaStatus, type RwaToken } from "../binance/rwa.js";
 import { getQuote } from "../binance/trading.js";
 import { buildQuote, checkCaps, type GiftQuoteResult, type QuoteLimits } from "./picker.js";
 import { meetsIssuerMinimum, minimumText } from "./issuers.js";
@@ -127,7 +127,7 @@ export async function fetchTickerOptions(ticker: string, usd: number): Promise<T
   if (tokens.length === 0) throw new Error(`No tokenized stock for ${ticker.toUpperCase()} on BSC`);
 
   const options = await Promise.all(tokens.map((t) => quoteIssuer(t, usd, wallet)));
-  return { ticker: tokens[0]!.underlyingTicker, name: tokens[0]!.underlyingName, usd, options, fetchedAt: Date.now() };
+  return { ticker: tokens[0]!.underlyingTicker, name: displayName(tokens[0]!), usd, options, fetchedAt: Date.now() };
 }
 
 export function limitsFromConfig(dailyUsedUsd = 0): QuoteLimits {

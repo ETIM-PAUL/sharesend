@@ -34,5 +34,6 @@ export function meetsIssuerMinimum(issuer: string, usd: number): boolean {
 
 export function minimumText(issuer: string): string {
   const m = issuerInfo(issuer);
-  return m ? `${m.label} minimum is ${m.minExclusive ? "more than" : "at least"} $${m.minUsd}` : `unknown issuer ${issuer}`;
+  // Callers prefix the issuer's name ("Ondo: needs more than $5").
+  return m ? `needs ${m.minExclusive ? "more than" : "at least"} $${m.minUsd}` : `unknown issuer ${issuer}`;
 }

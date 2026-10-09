@@ -25,7 +25,8 @@ export interface RwaToken {
   tokenLogoUrl: string;
   decimals: string;
   underlyingTicker: string;
-  underlyingName: string;
+  /** Null for a few tokens (e.g. HYGWon, SECUon, SYSBon); fall back to tokenName. */
+  underlyingName: string | null;
   /** Shares represented by one token. sharesOut = tokensOut × tokenToShareRatio. */
   tokenToShareRatio: string;
   tags: string[] | null;
@@ -82,20 +83,22 @@ export async function listRwaTokens(chainId = BSC_CHAIN_ID): Promise<{ tokens: R
 export async function tokensForTicker(ticker: string, chainId = BSC_CHAIN_ID): Promise<RwaToken[]> {
   const t = ticker.trim().toUpperCase();
   const { tokens } = await listRwaTokens(chainId);
-  return tokens.filter((x) => x.underlyingTicker.toUpperCase() === t);
+  return tokens.filter((x) => (x.underlyingTicker ?? "").toUpperCase() === t);
 }
 
-/** Local search over ticker, token symbol and company name. Returns distinct underlying tickers, best match first. */
-export async function searchTickers(query: string, chainId = BSC_CHAIN_ID): Promise<{ ticker: string; name: string; issuers: Issuer[] }[]> {
+export const displayName = (t: Pick<RwaToken, "underlyingName" | "tokenName" | "underlyingTicker">) => t.underlyingName ?? t.tokenName ?? t.underlyingTicker;
+
+/** Ranks tokens against a query (ticker, token symbol, company name) into distinct tickers, best match first. Pure. */
+export function rankTickers(tokens: RwaToken[], query: string): { ticker: string; name: string; issuers: Issuer[] }[] {
   const q = query.trim().toLowerCase();
   if (!q) return [];
-  const { tokens } = await listRwaTokens(chainId);
   const byTicker = new Map<string, { ticker: string; name: string; issuers: Issuer[]; score: number }>();
   for (const t of tokens) {
-    const ticker = t.underlyingTicker;
-    const name = t.underlyingName;
-    const score =
-      ticker.toLowerCase() === q ? 3 : t.tokenSymbol.toLowerCase() === q ? 2 : name.toLowerCase().includes(q) || ticker.toLowerCase().startsWith(q) ? 1 : 0;
+    const ticker = t.underlyingTicker ?? "";
+    if (!ticker) continue;
+    const name = displayName(t) ?? ticker;
+    const tl = ticker.toLowerCase();
+    const score = tl === q ? 3 : (t.tokenSymbol ?? "").toLowerCase() === q ? 2 : name.toLowerCase().includes(q) || tl.startsWith(q) ? 1 : 0;
     if (!score) continue;
     const row = byTicker.get(ticker) ?? { ticker, name, issuers: [], score };
     if (!row.issuers.includes(t.platformId)) row.issuers.push(t.platformId);
@@ -103,6 +106,13 @@ export async function searchTickers(query: string, chainId = BSC_CHAIN_ID): Prom
     byTicker.set(ticker, row);
   }
   return [...byTicker.values()].sort((a, b) => b.score - a.score || a.ticker.localeCompare(b.ticker)).map(({ score: _s, ...r }) => r);
+}
+
+/** Local search over ticker, token symbol and company name. Returns distinct underlying tickers, best match first. */
+export async function searchTickers(query: string, chainId = BSC_CHAIN_ID): Promise<{ ticker: string; name: string; issuers: Issuer[] }[]> {
+  if (!query.trim()) return [];
+  const { tokens } = await listRwaTokens(chainId);
+  return rankTickers(tokens, query);
 }
 
 export async function getUnderlyingProfile(token: Pick<RwaToken, "binanceChainId" | "tokenContractAddress">): Promise<UnderlyingProfile> {

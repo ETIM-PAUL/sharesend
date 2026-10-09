@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { request } from "./binance/client.js";
 import { BinanceError } from "./binance/errors.js";
 import { fetchTickerOptions, quoteGift } from "./pricing/quote.js";
@@ -8,6 +9,19 @@ import { getDb } from "./db/pool.js";
 import { migrate } from "./db/migrate.js";
 
 const app = new Hono();
+
+// The web app (another origin) calls this service from the browser.
+const webOrigins = (process.env.WEB_ORIGINS ?? "http://localhost:3000").split(",").map((o) => o.trim()).filter(Boolean);
+app.use(
+  "*",
+  cors({
+    origin: webOrigins,
+    allowMethods: ["GET", "POST", "OPTIONS"],
+    allowHeaders: ["content-type", "PAYMENT-SIGNATURE", "X-PAYMENT"],
+    exposeHeaders: ["PAYMENT-REQUIRED", "PAYMENT-RESPONSE"],
+    maxAge: 600,
+  }),
+);
 
 // Host-provided region name (Railway, Render, Fly), for checking we run outside prohibited regions.
 const region = process.env.RAILWAY_REPLICA_REGION ?? process.env.RENDER_REGION ?? process.env.FLY_REGION ?? "local";

@@ -3,12 +3,20 @@
 //   GET|POST /gifts/:id/pay     no PAYMENT-SIGNATURE → 402 again; with it → verify, settle, PAID, claim link
 //   POST /gifts/:id/pay/draft   {from, asset} → exact EIP-712 data to sign, balance, and the Permit2 approve tx if needed
 //   GET /pay/:id                minimal pay page for browser wallets (MetaMask, Binance Web3 Wallet, Trust, …)
-//   GET /gifts/:id              public status (no addresses, no codes)
+//   GET /gifts/:id              public status (no sender address, no message, no codes)
+//   POST /gifts/:id/cancel      {message, signature} signed by the sender → expire / refund / return
+//   POST /gifts/:id/link        {message, signature} signed by the sender → new claim link (old one stops working)
+//   GET /search?q=              tokenized stocks on BSC by ticker or company name
 //   GET /economics              self-funding ledger summary
 import { Hono, type Context } from "hono";
 import { config } from "../config.js";
 import { getDb } from "../db/pool.js";
-import { dailyUsedUsd, getGift, type Gift } from "../gifts/ledger.js";
+import { dailyUsedUsd, getGift, reissueClaimCode, type Gift } from "../gifts/ledger.js";
+import { verifySender, type SenderAction } from "../gifts/senderAuth.js";
+import { publicClient } from "../chain/bsc.js";
+import { searchTickers } from "../binance/rwa.js";
+import { cancelGift } from "../execution/cancel.js";
+import { advanceInBackground } from "../execution/advance.js";
 import { claimLink } from "../gifts/codes.js";
 import { BinanceError } from "../binance/errors.js";
 import { b402, BSC_NETWORK, type PaymentRequirements } from "../payments/b402.js";
@@ -54,7 +62,15 @@ function publicGift(g: Gift) {
     recipientName: g.recipientName,
     paymentExpiresAt: g.paymentExpiresAt,
     claimExpiresAt: g.claimExpiresAt,
+    createdAt: g.createdAt,
     dryRun: g.dryRun,
+    failureReason: g.failureReason,
+    // Public on-chain anyway; real hashes only (dry runs use synthetic ones).
+    txs: Object.fromEntries(
+      Object.entries({ payment: g.paymentTx, buy: g.buyTx, vault: g.vaultTx, claim: g.claimTx, return: g.returnTx, refund: g.refundTx }).filter(
+        ([, v]) => typeof v === "string" && /^0x[0-9a-fA-F]{64}$/.test(v),
+      ),
+    ),
   };
 }
 
@@ -126,6 +142,8 @@ async function pay(c: Context) {
       return c.json({ ok: false, error: r.error, retryable: r.retryable ?? false }, r.status);
     }
     c.header("PAYMENT-RESPONSE", encodeHeader({ success: true, transaction: r.settleTx ?? "", network: BSC_NETWORK, payer: r.gift.senderAddress }));
+    // Start the buy right away when this host can run it (needs a signed-in `baw`); otherwise it waits as "queued".
+    if (!r.alreadyPaid && process.env.AUTO_EXECUTE === "true") advanceInBackground(db, id);
     const base = process.env.CLAIM_BASE_URL ?? origin(c);
     return c.json({
       ok: true,
@@ -189,6 +207,48 @@ gifts.get("/gifts/:id", async (c) => {
   if (!db) return c.json({ ok: false, error: "database not configured" }, 503);
   const g = await getGift(db, c.req.param("id"));
   return g ? c.json({ ok: true, gift: publicGift(g) }) : c.json({ ok: false, error: "gift not found" }, 404);
+});
+
+const verifyWithChain = (address: string, message: string, signature: string) =>
+  // Handles EOAs and smart-contract wallets (ERC-1271).
+  publicClient().verifyMessage({ address: address as `0x${string}`, message, signature: signature as `0x${string}` });
+
+async function senderAction(c: Context, action: SenderAction) {
+  if (limited(clientIp(c), 20)) return { res: c.json({ ok: false, error: "too many requests" }, 429) };
+  const db = dbOr503(c);
+  if (!db) return { res: c.json({ ok: false, error: "database not configured" }, 503) };
+  const g = await getGift(db, c.req.param("id")!);
+  if (!g) return { res: c.json({ ok: false, error: "gift not found" }, 404) };
+  const body = (await c.req.json().catch(() => null)) as { message?: unknown; signature?: unknown } | null;
+  const auth = await verifySender(db, g, action, body?.message, body?.signature, verifyWithChain);
+  if (!auth.ok) return { res: c.json({ ok: false, error: auth.error }, 401) };
+  return { db, g };
+}
+
+gifts.post("/gifts/:id/cancel", async (c) => {
+  const a = await senderAction(c, "cancel");
+  if ("res" in a) return a.res;
+  const r = await cancelGift(a.db!, a.g!.id);
+  return r.ok ? c.json({ ok: true, gift: publicGift(r.gift) }) : c.json({ ok: false, error: r.error }, r.status);
+});
+
+gifts.post("/gifts/:id/link", async (c) => {
+  const a = await senderAction(c, "link");
+  if ("res" in a) return a.res;
+  const code = await reissueClaimCode(a.db!, a.g!.id);
+  if (!code) return c.json({ ok: false, error: `a new link can't be made while the gift is ${a.g!.status.toLowerCase()}` }, 409);
+  return c.json({ ok: true, claimUrl: claimLink(process.env.CLAIM_BASE_URL ?? origin(c), a.g!.id, code) });
+});
+
+gifts.get("/search", async (c) => {
+  const q = (c.req.query("q") ?? "").slice(0, 40);
+  if (!q.trim()) return c.json({ ok: true, results: [] });
+  try {
+    return c.json({ ok: true, results: (await searchTickers(q)).slice(0, 12) });
+  } catch (e) {
+    if (e instanceof BinanceError) return c.json({ ok: false, error: `Binance: ${e.message}` }, 502);
+    throw e;
+  }
 });
 
 gifts.get("/economics", async (c) => {

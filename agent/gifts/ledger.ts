@@ -151,7 +151,9 @@ export async function dailyUsedUsd(db: Queryable): Promise<number> {
   const { rows } = await db.query<{ used: string }>(
     `SELECT coalesce(sum(usd_cost), 0) AS used FROM gifts
      WHERE created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-       AND status NOT IN ('EXPIRED', 'REFUNDED') AND NOT dry_run`,
+       AND status NOT IN ('EXPIRED', 'REFUNDED') AND NOT dry_run
+       -- An unpaid gift stops counting once its payment window has passed.
+       AND NOT (status = 'AWAITING_PAYMENT' AND payment_expires_at <= now())`,
   );
   return Number(rows[0]!.used);
 }
@@ -344,6 +346,19 @@ export async function recordTx(db: Queryable, id: string, status: GiftStatus, fi
     if (!cur.rows[0]) throw new GiftNotFoundError(id);
     throw new StaleStateError(`${status} with ${field} unset or equal`, cur.rows[0].status);
   }
+}
+
+/**
+ * Replaces a gift's claim code (the old link stops working) and returns the new one. Only before anyone
+ * has started claiming: PAID, BUYING or READY.
+ */
+export async function reissueClaimCode(db: Queryable, id: string): Promise<string | null> {
+  const code = generateClaimCode();
+  const r = await db.query(
+    "UPDATE gifts SET claim_code_hash = $2, claim_code_issued = true, updated_at = now() WHERE id = $1 AND status IN ('PAID', 'BUYING', 'READY')",
+    [id, hashClaimCode(code)],
+  );
+  return r.rowCount ? code : null;
 }
 
 // ---- Claims ----

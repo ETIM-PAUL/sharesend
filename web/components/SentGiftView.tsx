@@ -1,0 +1,140 @@
+"use client";
+
+import { useState } from "react";
+import { useParams } from "next/navigation";
+import Link from "next/link";
+import { usePrivy, useWallets } from "@privy-io/react-auth";
+import { createWalletClient, custom } from "viem";
+import { bsc } from "viem/chains";
+import { agent, senderMessage, type PublicGift } from "@/lib/agent";
+import { shortAddr, usd } from "@/lib/format";
+import { getSent, type SentGift } from "@/lib/sent";
+import { useHydrated } from "@/lib/useHydrated";
+import { GiftProgress, useGift } from "./GiftProgress";
+import { ShareCard } from "./ShareCard";
+import { Button, Notice } from "./ui";
+
+const CANCELLABLE = new Set(["AWAITING_PAYMENT", "PAID", "READY"]);
+const RELINKABLE = new Set(["PAID", "BUYING", "READY"]);
+
+/** The sender's view of one gift: where it is, a new claim link, and cancel. */
+export function SentGiftView() {
+  const { id } = useParams<{ id: string }>();
+  const { gift, setGift, error } = useGift(id);
+  const local = useHydrated() ? getSent(id) : undefined;
+
+  if (error && !gift) return <Notice kind="error">{error}</Notice>;
+  if (!gift) return <p className="text-sm text-ink-soft">Loading gift…</p>;
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="numerals text-3xl font-bold text-ink">
+          {usd(gift.usd)} of {gift.ticker}
+        </h1>
+        <p className="mt-1 text-ink-soft">
+          For {gift.recipientName}
+          {local ? `, sent ${new Date(local.sentAt).toLocaleDateString(undefined, { day: "numeric", month: "long" })}` : ""}
+        </p>
+      </div>
+      <GiftProgress gift={gift} />
+      <SenderActions gift={gift} local={local} onChange={setGift} />
+      <Link href="/sent" className="block text-sm text-engrave underline underline-offset-4">
+        All gifts you sent
+      </Link>
+    </div>
+  );
+}
+
+function SenderActions({ gift, local, onChange }: { gift: PublicGift; local?: SentGift; onChange: (g: PublicGift) => void }) {
+  const { ready, authenticated, login } = usePrivy();
+  const { wallets } = useWallets();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [link, setLink] = useState<string | null>(null);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+
+  const canCancel = CANCELLABLE.has(gift.status);
+  const canRelink = RELINKABLE.has(gift.status);
+  if (!canCancel && !canRelink) return null;
+
+  // Only the wallet that paid can act on the gift.
+  const senderWallet = local ? wallets.find((w) => w.address.toLowerCase() === local.senderAddress.toLowerCase()) : undefined;
+
+  async function sign(action: "cancel" | "link") {
+    if (!senderWallet) throw new Error(local ? `Sign in with ${shortAddr(local.senderAddress)}, the wallet that paid for this gift.` : "Open this page on the device you sent the gift from.");
+    await senderWallet.switchChain(56);
+    const client = createWalletClient({ chain: bsc, transport: custom(await senderWallet.getEthereumProvider()) });
+    const message = senderMessage(action, gift.id, new Date().toISOString());
+    const signature = await client.signMessage({ account: senderWallet.address as `0x${string}`, message });
+    return agent.senderAction(gift.id, action, message, signature);
+  }
+
+  async function run(action: "cancel" | "link") {
+    setError(null);
+    setBusy(action === "cancel" ? "Confirm in your wallet to cancel…" : "Confirm in your wallet to get a new link…");
+    try {
+      const r = await sign(action);
+      if (action === "link" && r.claimUrl) setLink(r.claimUrl);
+      if (action === "cancel" && r.gift) onChange(r.gift);
+      setConfirmCancel(false);
+    } catch (e) {
+      const m = (e as Error).message;
+      setError(/rejected|denied|4001/i.test(m) ? "You cancelled in your wallet. Nothing changed." : m);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (ready && !authenticated)
+    return (
+      <div className="space-y-3 border-t border-rule pt-5">
+        <p className="text-sm text-ink-soft">Sign in with the wallet that paid to get a new claim link or cancel this gift.</p>
+        <Button variant="quiet" onClick={login}>
+          Sign in
+        </Button>
+      </div>
+    );
+
+  return (
+    <div className="space-y-3 border-t border-rule pt-5">
+      {link && local ? (
+        <ShareCard url={link} recipientName={local.recipientName} amountUsd={local.usd} companyName={local.companyName} message={local.message} />
+      ) : canRelink ? (
+        <>
+          <p className="text-sm text-ink-soft">Lost the claim link? Get a new one. The old link stops working.</p>
+          <Button variant="quiet" onClick={() => run("link")} disabled={!!busy}>
+            Get a new claim link
+          </Button>
+        </>
+      ) : null}
+
+      {canCancel ? (
+        confirmCancel ? (
+          <Notice>
+            {gift.status === "READY"
+              ? "The stock comes back to the wallet you paid from. The claim link stops working."
+              : gift.status === "PAID"
+                ? "You get your payment back in full. The claim link stops working."
+                : "This gift hasn't been paid, so nothing is charged."}
+            <div className="mt-3 flex gap-2">
+              <button className="rounded-full bg-error-ink px-4 py-2 text-sm font-semibold text-sheet" onClick={() => run("cancel")} disabled={!!busy}>
+                Cancel the gift
+              </button>
+              <button className="rounded-full border border-rule px-4 py-2 text-sm" onClick={() => setConfirmCancel(false)}>
+                Keep it
+              </button>
+            </div>
+          </Notice>
+        ) : (
+          <button className="w-full py-2 text-sm text-error-ink underline underline-offset-4" onClick={() => setConfirmCancel(true)}>
+            Cancel this gift
+          </button>
+        )
+      ) : null}
+
+      {busy ? <p className="text-sm text-ink-soft" aria-live="polite">{busy}</p> : null}
+      {error ? <Notice kind="error">{error}</Notice> : null}
+    </div>
+  );
+}

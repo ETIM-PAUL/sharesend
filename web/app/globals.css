@@ -1,0 +1,104 @@
+@import "tailwindcss";
+
+/* ShareSend: a share certificate that travels like a message.
+   Banknote paper, bottle-green ink, a gold seal used once (when a gift is paid). */
+:root {
+  --paper: #edf2ee;
+  --sheet: #f8fbf9;
+  --ink: #13302a;
+  --ink-soft: #4f6a62;
+  --engrave: #2e6b57;
+  --rule: #c9d6cf;
+  --foil: #c59a3d;
+  --notice-bg: #f6ecd2;
+  --notice-ink: #6a4a05;
+  --error-bg: #f8e1dd;
+  --error-ink: #8b1f13;
+  --whatsapp: #1f8f4e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #0f1d19;
+    --sheet: #152723;
+    --ink: #e4eee9;
+    --ink-soft: #9db5ac;
+    --engrave: #6fb79a;
+    --rule: #2a403a;
+    --foil: #d9b25e;
+    --notice-bg: #3a2f13;
+    --notice-ink: #f0d695;
+    --error-bg: #3c1c17;
+    --error-ink: #ffb3a7;
+    --whatsapp: #3fbf74;
+  }
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-sheet: var(--sheet);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-engrave: var(--engrave);
+  --color-rule: var(--rule);
+  --color-foil: var(--foil);
+  --color-notice-bg: var(--notice-bg);
+  --color-notice-ink: var(--notice-ink);
+  --color-error-bg: var(--error-bg);
+  --color-error-ink: var(--error-ink);
+  --color-whatsapp: var(--whatsapp);
+  --font-sans: var(--font-figtree);
+  --font-display: var(--font-bodoni);
+}
+
+html {
+  background: var(--paper);
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-figtree), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--engrave);
+  outline-offset: 2px;
+}
+
+/* Engraved frame: two crossing line screens, like the border of a share certificate. */
+.certificate {
+  background:
+    repeating-linear-gradient(45deg, color-mix(in srgb, var(--engrave) 22%, transparent) 0 1px, transparent 1px 6px),
+    repeating-linear-gradient(-45deg, color-mix(in srgb, var(--engrave) 22%, transparent) 0 1px, transparent 1px 6px),
+    var(--sheet);
+  padding: 10px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--engrave) 45%, transparent);
+}
+
+.certificate-inner {
+  background: var(--sheet);
+  border: 1px solid color-mix(in srgb, var(--engrave) 35%, transparent);
+  border-radius: 2px;
+}
+
+.numerals {
+  font-family: var(--font-bodoni), "Bodoni 72", Didot, serif;
+  font-variant-numeric: lining-nums;
+}
+
+/* The one orchestrated moment: the seal is pressed when payment lands. */
+@keyframes press-seal {
+  0% { transform: scale(1.6) rotate(-18deg); opacity: 0; }
+  60% { transform: scale(0.94) rotate(-8deg); opacity: 1; }
+  100% { transform: scale(1) rotate(-10deg); opacity: 1; }
+}
+.seal {
+  transform: rotate(-10deg);
+  animation: press-seal 520ms cubic-bezier(.2, .9, .3, 1.2) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .seal { animation: none; }
+}

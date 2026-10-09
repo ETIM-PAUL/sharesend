@@ -15,7 +15,8 @@ import { beginClaim, createGift, getGift, transition } from "../gifts/ledger.js"
 import { quoteGift } from "../pricing/quote.js";
 import { execDeps } from "../execution/live.js";
 import { runBuy, type ExecOutcome } from "../execution/buy.js";
-import { payoutClaim, refundGift, returnGift } from "../execution/payouts.js";
+import { payoutClaim } from "../execution/payouts.js";
+import { advance } from "../execution/advance.js";
 
 const DEFAULT_SENDER = "0x5e78822d6326360c51d746E164d878210E0FEbff"; // test address from docs/issuers.md
 
@@ -43,24 +44,6 @@ function report(label: string, r: ExecOutcome) {
   console.log(`${label}: ${r.status}${"reason" in r ? ` — ${r.reason}` : ""}`);
 }
 
-async function advance(db: Db, id: string): Promise<ExecOutcome> {
-  const d = execDeps(db);
-  const g = (await getGift(db, id))!;
-  switch (g.status) {
-    case "PAID":
-    case "BUYING":
-      return runBuy(d, id);
-    case "CLAIMING":
-      return payoutClaim(d, id);
-    case "RETURNING":
-      return returnGift(d, id);
-    case "FAILED":
-    case "REFUNDING":
-      return refundGift(d, id);
-    default:
-      return { status: "NOOP", gift: g };
-  }
-}
 
 export async function giftCommand(cmd: string, args: string[]): Promise<boolean> {
   if (!["dryrun", "live-gift", "resume", "show"].includes(cmd)) return false;
