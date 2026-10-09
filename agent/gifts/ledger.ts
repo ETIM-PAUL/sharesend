@@ -40,6 +40,9 @@ export interface Gift {
   updatedAt: Date;
   /** Created with LIVE_TRADING=false: synthetic tx hashes, excluded from caps and reconciliation. */
   dryRun: boolean;
+  /** The x402 requirements offered in the 402 response (JSON). */
+  paymentRequirements: unknown[] | null;
+  claimCodeIssued: boolean;
 }
 
 // ---- Errors ----
@@ -106,6 +109,8 @@ function toGift(r: any): Gift {
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     dryRun: r.dry_run,
+    paymentRequirements: r.payment_requirements ?? null,
+    claimCodeIssued: r.claim_code_issued ?? false,
   };
 }
 
@@ -126,6 +131,7 @@ export interface NewGift {
   quoteId?: string;
   paymentExpiresAt: Date;
   dryRun?: boolean;
+  paymentRequirements?: unknown[];
 }
 
 export interface GiftCaps {
@@ -175,8 +181,8 @@ export async function createGift(db: Db, input: NewGift, caps: GiftCaps): Promis
 
     const { rows } = await c.query(
       `INSERT INTO gifts (id, status, sender_address, sender_name, recipient_name, message, ticker, issuer,
-         token_address, token_decimals, quoted_token_amount, usd_cost, fee_usd, quote_id, claim_code_hash, payment_expires_at, dry_run)
-       VALUES ($1, 'AWAITING_PAYMENT', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+         token_address, token_decimals, quoted_token_amount, usd_cost, fee_usd, quote_id, claim_code_hash, payment_expires_at, dry_run, payment_requirements)
+       VALUES ($1, 'AWAITING_PAYMENT', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
        RETURNING *`,
       [
         randomUUID(),
@@ -195,6 +201,7 @@ export async function createGift(db: Db, input: NewGift, caps: GiftCaps): Promis
         hashClaimCode(claimCode),
         input.paymentExpiresAt,
         input.dryRun ?? false,
+        input.paymentRequirements ? JSON.stringify(input.paymentRequirements) : null,
       ],
     );
     const gift = toGift(rows[0]);

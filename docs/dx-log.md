@@ -7,13 +7,15 @@ Format: time | page/endpoint | expected | happened | time lost
 - Docs first opened: true
 - First successful authenticated API call: 2026-10-05 21:50 UTC — `POST /build/api/v2/b402/supported`, from my machine. From the hosted agent service (Railway, Singapore, egress 208.77.246.55): 2026-10-05 23:09 UTC
 
-## I first of all read through the Telegram builder chat for any Friction (from builder chat, Sep 16 – Oct 5; peer reports, not verified by us)
+## I first of all read through the Telegram builder chat for any Friction (from builder chat, Sep 16 – Oct 5; peer reports, not verified by me)
 
 - 2026-10-05 13:59 UTC | RWA underlying-market API | documented marketStatus enum | returns "offhours" with openState=true, reasonCode=TRADING; value not in docs | unverified
 - 2026-10-05 13:59 UTC | /quote -> /swap for NVDAon | RFQ per API reference | LiquidMesh route, executionMode=SWAP reported | unverified
 - 2026-10-05 13:59 UTC | any signed call from hosted server | works as from dev machine | 40304 "compliance restriction" from serverless/US datacenter IPs; dev machine OK | unverified, unanswered by organizers
 - 2026-10-05 13:59 UTC | B402 credential form | open application | "you need permission" reported | unverified
 - 2026-10-05 13:59 UTC | dev portal on mobile | create-key button | not visible; desktop only | unverified
+
+
 
 ## Tested for this frictions - My own log
 
@@ -43,13 +45,20 @@ Format: time | page/endpoint | expected | happened | time lost
 - 2026-10-06 ~00:00 UTC | `/aggregator/quote` RWA | userWalletAddress optional per general docs | required for RWA tokens; without it the quote is rejected | -
 - 2026-10-06 00:02 UTC | Ondo quote during session change | statusInfo says closed → clear reason | 40367 "The stock market is shifting its trading phase. Expected to open in 0d 0h 2m." Ondo pauses ~00:00–00:05 UTC daily ("Paused for session transition"); bStocks kept quoting through it. New error code, not in the error-code list I've seen | -
 - 2026-10-06 00:02 UTC | referencePrice per issuer | one reference price per underlying | NVDA ref differs by issuer at the same moment (bStocks $240.05 vs Ondo $240.36 a few min earlier); each issuer has its own reference feed, so "premium vs reference" is per-issuer | -
-
-- 2026-10-06 ~19:30 UTC | `baw wallet settings` | session lasts to the hard cutoff noted at sign-in (~Oct 12) | now shows maxSigninDuration "48h" and sessionExpireTime 2026-10-08 19:32 UTC (same as inactiveSignOutTime). Re-sign-in needed every 2 days, not once a week; judging (Oct 12–23) needs ~6 sign-ins with Paul's phone | -
+- 2026-10-06 ~19:30 UTC | `baw wallet settings` | session lasts to the hard cutoff noted at sign-in (~Oct 12) | now shows maxSigninDuration "48h" and sessionExpireTime 2026-10-08 19:32 UTC (same as inactiveSignOutTime). Re-sign-in needed every 2 days, not once a week; judging (Oct 12–23) that means I will do a total of ~6 sign-ins with my phone during the hackathon building and judging phase | -
 - 2026-10-06 ~19:30 UTC | skill vs CLI version | one version | installed skill metadata says version 1.12.0 / requiredCliVersion 1.10.0; CLI 1.10.0. Skill references can change without a CLI update | -
 - 2026-10-06 ~19:35 UTC | `baw market-order list` response | received amount for a finished swap | list entries have fromTokenQty and txHash but no toToken amount; the amount actually received has to be read from the swap tx's Transfer logs on-chain | -
 - 2026-10-06 ~19:35 UTC | `baw market-order quote` USDT→NVDAB vs NVDAB→USDT | buy-only for stock tokens? | selling a stock token back to USDT quotes fine (0.001 NVDAB → 0.2398 USDT); no doc says either way | -
-- 2026-10-06 ~19:35 UTC | `baw wallet send --amount` (human units) with bStocks | clear unit semantics | bStocks tokens expose uiMultiplier / balanceOfUI; docs don't say whether `--amount` is raw-decimals or UI units for these tokens. Pipeline verifies what arrives at the vault on-chain; to confirm in the first live run | -
+- 2026-10-06 ~19:35 UTC | `baw wallet send --amount` (human units) with bStocks | clear unit semantics | bStocks tokens expose uiMultiplier / balanceOfUI; docs don't say whether `--amount` is raw-decimals or UI units for these tokens. My pipeline checks what arrives at the vault on-chain; I'll confirm it in the first live run | -
 - 2026-10-06 ~19:40 UTC | Transaction API `/pre-transaction/simulate` | balance changes for both sides of a transfer | `balanceChanges` lists only the sender's change (e.g. -1e18 USDT for the sender), not the recipient's. Status values seen: "SUCCESS", "FAILED" with failReason "execution reverted: BEP20: transfer amount exceeds balance" | -
 - 2026-10-06 ~19:40 UTC | `baw wallet tx-lock` | parallel sends | one pending tx at a time per wallet (LOCKED until confirmed or double-confirm resolved): buys through the Agentic Wallet have to run one after another | -
 - 2026-10-06 ~19:45 UTC | `baw` errors | consistent machine-readable errors | API errors are JSON `{success:false,error:{code,name,message}}` with exit 1, but CLI usage errors (unknown command) are plain text on stderr with exit 0 | -
-- 2026-10-06 ~19:45 UTC | `baw` session storage | documented location for servers | session lives in `~/.baw` (found by looking, not documented). Running baw on a host like Railway needs a persistent volume there, and sign-in (QR) has to be driven from the server | -
+- 2026-10-06 ~19:45 UTC | `baw` session storage | documented location for servers | session lives in `~/.baw` (I found it by looking; not documented). Running baw on a host like Railway needs a persistent volume there, and sign-in (QR) has to be driven from the server | -
+
+- 2026-10-07 ~10:00 UTC | B402 `/supported` response | payment assets with contract addresses | `kinds[]` only carry `extra.name` (EIP-712 token name), version, method, signer/spender. No asset address, no decimals. The guide says never to hardcode, but the address has to come from somewhere: I map name → address from the Agentic Wallet skill's token table and check on-chain `name()` matches before offering it | ~20 min
+- 2026-10-07 ~10:10 UTC | B402 Permit2 Signing page | full EIP-712 typed data | the page gives the Witness type only in prose (`Witness(address to,uint256 validAfter)`) and one payload example. Domain (name "Permit2", no version), primary type and field order I had to rebuild from the standard Permit2 witness transfer; confirmed only by trial against `/verify` | ~30 min
+- 2026-10-07 ~10:20 UTC | B402 `/verify` with a random unfunded wallet | isValid=false (no balance, no Permit2 allowance) | `{"isValid":true}` for USDT/USDC permit2-exact and U/USD1 eip3009 from a wallet holding nothing. Verify checks the signature only; a bad signature returns `invalid_exact_evm_payload_signature`. Marking an order paid on verify would be a bug; I check balance + allowance on-chain myself and only treat settle as payment | ~10 min
+- 2026-10-07 ~10:25 UTC | B402 docs fetching | readable pages | integration guide and Permit2 pages are JS-only (HTTP 202 with an empty shell to curl); I could only read them through a renderer | -
+- 2026-10-07 ~10:40 UTC | `baw x402-payment preview` on my own 402 | — | worked first try on my x402 v2 body; it reorders options (eip3009 first), labels permit2-exact as "permit2", and flags USDT/USDC with needApproveFirst=true (its doc says the approve gas is sponsored on BSC) | -
+- 2026-10-08 ~19:45 UTC | B402 with a regular browser wallet (MetaMask / Binance Web3 Wallet) paying in USDT | one signature | USDT and USDC on BSC only support Permit2, so a first-time payer needs an `approve(Permit2)` transaction first, paid in BNB. `baw` sponsors that approve for Agentic Wallets, but nothing in the B402 docs covers sponsoring it for ordinary wallets. A sender holding only USDT and no BNB can't pay; U and USD1 (EIP-3009) don't have this problem | -
+- 2026-10-08 ~19:45 UTC | B402 docs, client side | a reference for building the payer's signing flow in a browser wallet | the guides cover the merchant side (402 body, verify, settle). For the wallet side I had to assemble eth_signTypedData_v4 JSON myself (EIP712Domain types, uint256 as strings) and check it by trial against /verify | ~30 min

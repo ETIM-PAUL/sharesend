@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShareSend · Pay</title>
+<meta name="referrer" content="no-referrer">
+<style>
+  :root {
+    --bg: #f6f5f1; --card: #ffffff; --ink: #1c1b18; --muted: #6b675e; --line: #e4e1d8;
+    --accent: #1f6f4a; --accent-ink: #ffffff; --warn-bg: #fff4dc; --warn-ink: #6b4b00; --err-bg: #fde8e6; --err-ink: #8a1c12;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141412; --card: #1e1d1a; --ink: #f1efe9; --muted: #a29e93; --line: #33312c;
+      --accent: #4fb985; --accent-ink: #0c1a12; --warn-bg: #3a2f12; --warn-ink: #f4d58a; --err-bg: #3d1916; --err-ink: #ffb4aa;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 440px; margin: 0 auto; padding: 24px 16px 48px; }
+  .brand { font-weight: 700; letter-spacing: .2px; color: var(--muted); font-size: 14px; margin-bottom: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 20px; margin-bottom: 14px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0; }
+  .row { display: flex; justify-content: space-between; padding: 6px 0; }
+  .row.total { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 10px; font-weight: 700; }
+  .muted { color: var(--muted); font-size: 14px; }
+  label.opt { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; margin: 8px 0; cursor: pointer; }
+  label.opt input { accent-color: var(--accent); }
+  label.opt small { color: var(--muted); display: block; }
+  button { width: 100%; border: 0; border-radius: 12px; padding: 14px 16px; font: inherit; font-weight: 650; cursor: pointer; background: var(--accent); color: var(--accent-ink); margin-top: 10px; }
+  button.secondary { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  button:disabled { opacity: .5; cursor: default; }
+  .note { border-radius: 12px; padding: 12px; margin-top: 10px; font-size: 14px; }
+  .note.warn { background: var(--warn-bg); color: var(--warn-ink); }
+  .note.err { background: var(--err-bg); color: var(--err-ink); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; word-break: break-all; }
+  input.link { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: 13px ui-monospace, Menlo, monospace; }
+  a { color: var(--accent); }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <div class="brand">ShareSend</div>
+
+  <section class="card" id="summary">
+    <p class="sub" id="loading">Loading gift…</p>
+  </section>
+
+  <section class="card hidden" id="paycard">
+    <div id="tokens"></div>
+    <button id="connect">Connect wallet</button>
+    <p class="muted hidden" id="account"></p>
+    <div id="status"></div>
+    <button class="hidden" id="approve">One-time setup: allow payments in <span id="approveSym"></span></button>
+    <button class="hidden" id="pay">Pay</button>
+  </section>
+
+  <section class="card hidden" id="done">
+    <h1>Paid ✓</h1>
+    <p class="sub" id="doneSub"></p>
+    <div id="claimBox" class="hidden">
+      <p><strong>Claim link</strong>: send it to the recipient. Save it now: it is shown only once.</p>
+      <input class="link" id="claimUrl" readonly>
+      <button id="copy">Copy link</button>
+      <button class="secondary" id="wa">Share on WhatsApp</button>
+    </div>
+    <p class="muted" id="settle"></p>
+  </section>
+</main>
+
+<script>
+(() => {
+  const id = location.pathname.split("/").filter(Boolean).pop();
+  const $ = (s) => document.getElementById(s);
+  const SYMBOL = { "Tether USD": "USDT", "USD Coin": "USDC", "United Stables": "U", "World Liberty Financial USD": "USD1" };
+  const BSC = { chainId: "0x38", chainName: "BNB Smart Chain", nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 }, rpcUrls: ["https://bsc-dataseed.bnbchain.org"], blockExplorerUrls: ["https://bscscan.com"] };
+  let gift = null, accepts = [], account = null, selected = null, draft = null, busy = false;
+
+  const usd = (n) => "$" + Number(n).toFixed(2);
+  function units(raw, dec = 18) {
+    const s = BigInt(raw).toString().padStart(dec + 1, "0");
+    const whole = s.slice(0, -dec), frac = s.slice(-dec).replace(/0+$/, "").slice(0, 6).padEnd(2, "0");
+    return `${whole}.${frac}`;
+  }
+  function el(tag, text, cls) { const e = document.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e; }
+  function note(text, kind = "warn") { const s = $("status"); s.replaceChildren(); if (text) s.append(el("div", text, `note ${kind}`)); }
+  function setBusy(b) { busy = b; for (const k of ["connect", "approve", "pay"]) $(k).disabled = b; }
+  const show = (k, v = true) => $(k).classList.toggle("hidden", !v);
+
+  async function load() {
+    const res = await fetch(`/gifts/${encodeURIComponent(id)}/pay`, { headers: { accept: "application/json" } });
+    const body = await res.json().catch(() => ({}));
+    const s = $("summary"); s.replaceChildren();
+    if (res.status === 402) {
+      gift = body.gift; accepts = body.accepts || [];
+      s.append(el("h1", `${usd(gift.usd)} of ${gift.ticker}`), el("p", `A gift for ${gift.recipientName}`, "sub"));
+      const box = el("div"); box.style.marginTop = "14px";
+      const r1 = el("div", null, "row"); r1.append(el("span", "Gift"), el("span", usd(gift.usd)));
+      const r2 = el("div", null, "row"); r2.append(el("span", "ShareSend fee"), el("span", usd(gift.fee)));
+      const r3 = el("div", null, "row total"); r3.append(el("span", "Total"), el("span", usd(gift.usd + gift.fee)));
+      box.append(r1, r2, r3);
+      if (gift.dryRun) box.append(el("div", "Test mode: your payment is checked but not charged.", "note warn"));
+      const exp = el("p", "", "muted"); box.append(exp);
+      const tick = () => { const left = Math.max(0, Math.floor((new Date(gift.paymentExpiresAt) - Date.now()) / 1000)); exp.textContent = left ? `Price held for ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` : "Price expired: go back and get a new quote."; if (!left) { $("pay").disabled = true; } };
+      tick(); setInterval(tick, 1000);
+      s.append(box);
+      renderTokens(); show("paycard");
+    } else if (res.status === 409 && body.gift) {
+      s.append(el("h1", "Already paid"), el("p", `This gift is ${body.gift.status.toLowerCase().replace("_", " ")}.`, "sub"));
+    } else if (res.status === 410) {
+      s.append(el("h1", "Price expired"), el("p", "Go back and get a new quote.", "sub"));
+    } else {
+      s.append(el("h1", "Gift not found"), el("p", body.error || "Check the link.", "sub"));
+    }
+  }
+
+  function renderTokens() {
+    const t = $("tokens"); t.replaceChildren(el("p", "Pay with", "muted"));
+    accepts.forEach((a, i) => {
+      const sym = SYMBOL[a.extra.name] || a.extra.name;
+      const l = el("label", null, "opt");
+      const r = document.createElement("input"); r.type = "radio"; r.name = "token"; r.value = String(i); if (i === 0) r.checked = true;
+      r.onchange = () => { selected = a; refresh(); };
+      const txt = el("span"); txt.append(el("span", `${units(a.amount)} ${sym}`), el("small", a.extra.assetTransferMethod === "eip3009" ? "One signature" : "One signature (first time: a one-time approval)"));
+      l.append(r, txt); t.append(l);
+    });
+    selected = accepts[0] || null;
+  }
+
+  async function connect() {
+    if (!window.ethereum) { note("No wallet found. Open this page in your wallet app's browser (Binance Wallet, MetaMask, Trust Wallet).", "err"); return; }
+    setBusy(true);
+    try {
+      const [a] = await window.ethereum.request({ method: "eth_requestAccounts" });
+      account = a;
+      try { await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: BSC.chainId }] }); }
+      catch (e) { if (e && e.code === 4902) await window.ethereum.request({ method: "wallet_addEthereumChain", params: [BSC] }); else throw e; }
+      $("account").textContent = `Paying from ${account}`; show("account"); show("connect", false);
+      await refresh();
+    } catch (e) { note(e.message || String(e), "err"); }
+    finally { setBusy(false); }
+  }
+
+  async function refresh() {
+    draft = null; show("approve", false); show("pay", false);
+    if (!account || !selected) return;
+    note("");
+    const res = await fetch(`/gifts/${encodeURIComponent(id)}/pay/draft`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from: account, asset: selected.asset }) });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) { note(body.error || `Error ${res.status}`, "err"); return; }
+    draft = body;
+    const sym = SYMBOL[selected.extra.name] || selected.extra.name;
+    if (!body.sufficient) { note(`Not enough ${sym}: you have ${units(body.balance)}, this needs ${units(selected.amount)}.`, "err"); return; }
+    if (body.needsApproval) { $("approveSym").textContent = sym; show("approve"); note(`First payment with ${sym} from this wallet: approve it once (a small BNB gas fee), then pay with a signature.`); return; }
+    $("pay").textContent = `Pay ${units(selected.amount)} ${sym}`; show("pay");
+  }
+
+  async function waitReceipt(hash) {
+    for (let i = 0; i < 60; i++) {
+      const r = await window.ethereum.request({ method: "eth_getTransactionReceipt", params: [hash] });
+      if (r) return r.status === "0x1";
+      await new Promise((ok) => setTimeout(ok, 2000));
+    }
+    return false;
+  }
+
+  async function approve() {
+    if (!draft || !draft.approveTx) return;
+    setBusy(true);
+    try {
+      note("Confirm the approval in your wallet…");
+      const hash = await window.ethereum.request({ method: "eth_sendTransaction", params: [{ from: account, ...draft.approveTx }] });
+      note("Waiting for the approval to confirm…");
+      if (!(await waitReceipt(hash))) throw new Error("Approval didn't confirm. Try again.");
+      await refresh();
+    } catch (e) { note(e.message || String(e), "err"); }
+    finally { setBusy(false); }
+  }
+
+  async function pay() {
+    if (!draft || busy) return;
+    setBusy(true);
+    try {
+      note("Sign the payment in your wallet…");
+      const signature = await window.ethereum.request({ method: "eth_signTypedData_v4", params: [account, JSON.stringify(draft.typedData)] });
+      const inner = draft.method === "eip3009" ? { signature, authorization: draft.draft.authorization } : { signature, permit2Authorization: draft.draft.permit2Authorization };
+      const payload = { x402Version: 2, resource: draft.resource, accepted: draft.requirement, payload: inner };
+      const header = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+      note("Settling your payment…");
+      const res = await fetch(`/gifts/${encodeURIComponent(id)}/pay`, { method: "POST", headers: { "PAYMENT-SIGNATURE": header, accept: "application/json" } });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `Payment failed (${res.status})`);
+      done(body);
+    } catch (e) { note(e.message || String(e), "err"); }
+    finally { setBusy(false); }
+  }
+
+  function done(body) {
+    show("paycard", false); show("done");
+    $("doneSub").textContent = body.gift.dryRun ? "Test mode: payment verified, nothing was charged." : `Your gift for ${body.gift.recipientName} is queued: we're buying the stock now.`;
+    if (body.settleTx) { const a = el("a", "View payment on BscScan"); a.href = `https://bscscan.com/tx/${body.settleTx}`; a.target = "_blank"; a.rel = "noopener"; $("settle").replaceChildren(a); }
+    if (body.claimUrl) {
+      show("claimBox"); $("claimUrl").value = body.claimUrl;
+      $("copy").onclick = async () => { await navigator.clipboard.writeText(body.claimUrl); $("copy").textContent = "Copied ✓"; };
+      $("wa").onclick = () => { const text = `I sent you ${usd(body.gift.usd)} of ${body.gift.ticker} stock 🎁 Claim it here: ${body.claimUrl}`; window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener"); };
+    } else if (body.alreadyPaid) {
+      $("doneSub").textContent = "This gift was already paid. The claim link was shown with the first payment.";
+    }
+  }
+
+  $("connect").onclick = connect; $("approve").onclick = approve; $("pay").onclick = pay;
+  if (window.ethereum && window.ethereum.on) {
+    window.ethereum.on("accountsChanged", (a) => { account = a[0] || null; $("account").textContent = account ? `Paying from ${account}` : ""; refresh(); });
+    window.ethereum.on("chainChanged", () => refresh());
+  }
+  load().catch((e) => { $("summary").replaceChildren(el("p", e.message || String(e), "note err")); });
+})();
+</script>
+</body>
+</html>

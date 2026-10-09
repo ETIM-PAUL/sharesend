@@ -8,6 +8,7 @@ import { withTx, type Db } from "../db/pool.js";
 import { simulateEvmTx, broadcastSignedTx } from "../binance/transaction.js";
 import { BSC_CHAIN_ID } from "../binance/constants.js";
 import { nativeBalance, publicClient, transferIn, type TxState } from "../chain/bsc.js";
+import { recordGas } from "../payments/economics.js";
 import { NeedsGasError, SimulationFailedError, StillPendingError, type VaultPort, type VaultTransfer } from "./ports.js";
 
 /** Low-level vault operations, injectable for tests. */
@@ -20,6 +21,8 @@ export interface VaultBackend {
   /** Must treat "already known" as success. */
   broadcast(raw: string): Promise<void>;
   transferIn(hash: string, token: string, to: string): Promise<{ state: TxState; amount: bigint }>;
+  /** Gas paid for a confirmed tx, in wei (for the self-funding ledger). */
+  gasCostWei?(hash: string): Promise<bigint>;
 }
 
 export interface VaultOpts {
@@ -47,6 +50,10 @@ export function createVault(db: Db, backend: VaultBackend, opts: VaultOpts): Vau
           throw new Error(`Vault ${t.kind} tx ${hash} moved ${r.amount}, expected ${t.amount}`);
         }
         await db.query("UPDATE exec_records SET status = 'confirmed', updated_at = now() WHERE gift_id = $1 AND kind = $2", [t.giftId, t.kind]);
+        if (backend.gasCostWei) {
+          const wei = await backend.gasCostWei(hash).catch(() => null);
+          if (wei !== null) await recordGas(db, t.giftId, hash, wei, null);
+        }
         return { txHash: hash, amount: r.amount };
       }
       if (r.state === "reverted") {
@@ -184,5 +191,9 @@ export function liveVaultBackend(): VaultBackend {
       }
     },
     transferIn,
+    async gasCostWei(hash) {
+      const r = await pc.getTransactionReceipt({ hash: hash as Hex });
+      return r.gasUsed * r.effectiveGasPrice;
+    },
   };
 }

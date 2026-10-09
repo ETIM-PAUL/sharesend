@@ -6,6 +6,7 @@ import { buildQuote, checkCaps } from "../pricing/picker.js";
 import { searchTickers } from "../binance/rwa.js";
 import { BinanceError } from "../binance/errors.js";
 import { giftCommand } from "./gift.js";
+import { b402PayCommand } from "./b402pay.js";
 
 const fmtUsd = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtPct = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
@@ -57,8 +58,27 @@ async function main() {
     const q = args.join(" ");
     if (!q) throw new Error("usage: npm run cli -- search <text>");
     for (const r of (await searchTickers(q)).slice(0, 15)) console.log(`${r.ticker.padEnd(8)} ${r.name}  [${r.issuers.join(", ")}]`);
+  } else if (cmd === "b402-pay") {
+    await b402PayCommand(args);
+  } else if (cmd === "economics" || cmd === "expense") {
+    const { getDb } = await import("../db/pool.js");
+    const { migrate } = await import("../db/migrate.js");
+    const { economics, recordExpense } = await import("../payments/economics.js");
+    const db = getDb();
+    try {
+      await migrate(db);
+      if (cmd === "expense") {
+        const [kind, usdArg, ...note] = args;
+        if ((kind !== "runtime" && kind !== "api") || !(Number(usdArg) > 0) || !note.length) throw new Error('usage: npm run cli -- expense <runtime|api> <USD> "<note>"');
+        await recordExpense(db, kind, Number(usdArg), note.join(" "));
+      }
+      const e = await economics(db);
+      console.log(`fees earned ${fmtUsd(e.feesEarnedUsd)} from ${e.giftsWithFees} gifts · spent ${fmtUsd(e.spentUsd)} · net ${fmtUsd(e.netUsd)} · vault gas ${e.gasBnbWei} wei BNB`);
+    } finally {
+      await db.end();
+    }
   } else if (!(await giftCommand(cmd ?? "", args))) {
-    throw new Error("commands: quote <TICKER> <USD> | search <text> | dryrun <TICKER> <USD> | live-gift <TICKER> <USD> --confirm | resume <giftId> | show <giftId>");
+    throw new Error("commands: quote <TICKER> <USD> | search <text> | dryrun <TICKER> <USD> | live-gift <TICKER> <USD> --confirm | resume <giftId> | show <giftId> | b402-pay <SERVER_URL> <TICKER> <USD> --confirm | economics | expense <runtime|api> <USD> <note>");
   }
 }
 

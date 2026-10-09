@@ -3,6 +3,9 @@ import { Hono } from "hono";
 import { request } from "./binance/client.js";
 import { BinanceError } from "./binance/errors.js";
 import { fetchTickerOptions, quoteGift } from "./pricing/quote.js";
+import { gifts } from "./routes/gifts.js";
+import { getDb } from "./db/pool.js";
+import { migrate } from "./db/migrate.js";
 
 const app = new Hono();
 
@@ -63,6 +66,14 @@ app.get("/egress-ip", async (c) => {
   }
   return c.json({ ip, location });
 });
+
+app.route("/", gifts);
+
+// Apply pending migrations on boot when a database is configured.
+if (process.env.DATABASE_URL)
+  migrate(getDb())
+    .then((ran) => ran.length && console.log(`migrations applied: ${ran.join(", ")}`))
+    .catch((e) => console.error("migration failed:", e.message));
 
 const port = Number(process.env.PORT ?? 8080);
 serve({ fetch: app.fetch, port }, () => console.log(`sharesend-agent listening on :${port} (region ${region})`));
