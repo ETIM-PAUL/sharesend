@@ -2,17 +2,26 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { usePrivy, useWallets } from "@privy-io/react-auth";
 import { claimApi, type Holding } from "@/lib/agent";
 import { shares as fmtShares, shortAddr, usd } from "@/lib/format";
 import { Sparkline } from "./Sparkline";
 import { Button, Notice } from "./ui";
 
-/** "Your stock": what the signed-in person received through ShareSend, with balances (Wallet API) and value now. */
+const isAddr = (a: string | null): a is string => !!a && /^0x[0-9a-fA-F]{40}$/.test(a);
+
+/**
+ * "Your stock": what someone received through ShareSend, with balances (Wallet API) and value now (Market API).
+ * Signed in: all their wallets. With ?address=0x…: that one wallet, read-only (balances are public on-chain),
+ * so a recipient who claimed to a pasted address can follow it without signing in.
+ */
 export function Holdings() {
   const { ready, authenticated, login, logout } = usePrivy();
   const { wallets } = useWallets();
-  const addresses = wallets.map((w) => w.address).join(",");
+  const viewAddress = useSearchParams().get("address");
+  const readOnly = isAddr(viewAddress) && !(authenticated && wallets.some((w) => w.address.toLowerCase() === viewAddress.toLowerCase()));
+  const addresses = readOnly ? viewAddress : wallets.map((w) => w.address).join(",");
   const [result, setResult] = useState<{ key: string; holdings: (Holding & { wallet: string })[]; partial: boolean; error?: string } | null>(null);
 
   useEffect(() => {
@@ -33,9 +42,9 @@ export function Holdings() {
     };
   }, [addresses]);
 
-  if (!ready) return null;
+  if (!ready && !readOnly) return null;
 
-  if (!authenticated)
+  if (!authenticated && !readOnly)
     return (
       <div className="space-y-4">
         <h1 className="numerals text-3xl font-bold text-ink">Your stock</h1>
@@ -50,7 +59,8 @@ export function Holdings() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="numerals text-3xl font-bold text-ink">Your stock</h1>
+        <h1 className="numerals text-3xl font-bold text-ink">{readOnly ? "Stock in this wallet" : "Your stock"}</h1>
+        {readOnly ? <p className="mt-1 text-sm text-ink-soft">Wallet {shortAddr(viewAddress!)}</p> : null}
         {!loading && result!.holdings.length ? (
           <p className="mt-1 text-ink-soft">
             Worth about <span className="numerals text-ink">{usd(total)}</span> today
@@ -99,17 +109,27 @@ export function Holdings() {
         ))}
       </ul>
 
-      <div className="space-y-1 border-t border-rule pt-4 text-sm text-ink-soft">
-        {wallets.map((w) => (
-          <p key={w.address}>
-            Wallet {shortAddr(w.address)}
-            {w.walletClientType.startsWith("privy") ? " (made with your email)" : ""}
-          </p>
-        ))}
-        <button className="text-engrave underline underline-offset-4" onClick={logout}>
-          Sign out
-        </button>
-      </div>
+      {readOnly ? (
+        <p className="border-t border-rule pt-4 text-sm text-ink-soft">
+          Claimed with your email?{" "}
+          <button className="text-engrave underline underline-offset-4" onClick={() => login()}>
+            Sign in
+          </button>{" "}
+          to see everything you&apos;ve received.
+        </p>
+      ) : (
+        <div className="space-y-1 border-t border-rule pt-4 text-sm text-ink-soft">
+          {wallets.map((w) => (
+            <p key={w.address}>
+              Wallet {shortAddr(w.address)}
+              {w.walletClientType.startsWith("privy") ? " (made with your email)" : ""}
+            </p>
+          ))}
+          <button className="text-engrave underline underline-offset-4" onClick={logout}>
+            Sign out
+          </button>
+        </div>
+      )}
     </div>
   );
 }

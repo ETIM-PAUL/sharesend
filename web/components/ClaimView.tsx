@@ -139,7 +139,7 @@ function ClaimPanel({ id, code, data, onClaimed }: { id: string; code: string; d
       <section className="space-y-3 rounded-[10px] bg-sheet p-4">
         <p className="numerals text-2xl font-bold text-ink">It&apos;s yours.</p>
         <p className="text-[0.95rem] text-ink">The shares are in your wallet. You can see them, and what they&apos;re worth, any time.</p>
-        <Link href="/you">
+        <Link href={g.claimAddress ? `/you?address=${g.claimAddress}` : "/you"}>
           <Button>See your stock</Button>
         </Link>
         {g.claimTx ? (
@@ -153,6 +153,7 @@ function ClaimPanel({ id, code, data, onClaimed }: { id: string; code: string; d
   if (g.status === "CLAIMING") return <Notice>Sending your shares to your wallet. This usually takes under a minute.</Notice>;
   if (g.status === "PAID" || g.status === "BUYING") return <Notice>Your stock is being bought right now. This page updates by itself, and you can claim it in a few minutes.</Notice>;
   if (g.status === "AWAITING_PAYMENT") return <Notice>This gift hasn&apos;t been paid for yet.</Notice>;
+  if (g.status === "READY" && g.expired) return <Notice kind="error">This gift wasn&apos;t claimed in time, so it&apos;s going back to {g.senderName}.</Notice>;
   if (g.status !== "READY")
     return (
       <Notice kind="error">
@@ -216,6 +217,12 @@ function ClaimPanel({ id, code, data, onClaimed }: { id: string; code: string; d
       )}
 
       {error ? <Notice kind="error">{error}</Notice> : null}
+      {!error && g.claimError ? (
+        <Notice kind="error">
+          The last try couldn&apos;t send the shares to that wallet, so nothing moved. Try a different address, or use your email.
+          <span className="mt-1 block text-xs opacity-80">Details: {g.claimError}</span>
+        </Notice>
+      ) : null}
 
       <button className="w-full text-sm text-engrave underline underline-offset-4" onClick={() => setMode(mode === "email" ? "paste" : "email")}>
         {mode === "email" ? "I already have a BNB Chain wallet" : "Use my email instead"}

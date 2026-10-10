@@ -8,6 +8,7 @@ export function units(raw: string, decimals = 18, maxFrac = 4): string {
 }
 
 export function shares(n: number): string {
+  if (!(n > 0)) return "0";
   if (n >= 1) return n.toFixed(4);
   // Show enough digits to see the slice: 0.0208, 0.00412
   const digits = Math.max(4, 2 - Math.floor(Math.log10(n)) + 2);

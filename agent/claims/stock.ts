@@ -84,11 +84,36 @@ export function cleanSeries(candles: Candle[], ratio: number, referencePrice?: n
   return pts.filter((p) => Math.abs(p.price / anchor - 1) * 100 <= maxDevPct).sort((a, b) => a.t - b.t);
 }
 
-/** Value of `shares` over time since `sinceMs` (hourly, or daily for older gifts). */
-export async function valueSeries(info: StockInfo, shares: number, sinceMs: number): Promise<{ t: number; usd: number }[]> {
-  const ageH = Math.max(1, (Date.now() - sinceMs) / 3_600_000);
+/** Per-share price now: the latest clean Market API candle if it's recent, else the issuer's reference price. Pure. */
+export function pickPriceNow(
+  series: { t: number; price: number }[],
+  referencePrice: number,
+  now: number,
+  maxAgeMs = 2 * 3_600_000,
+): { price: number; source: "market" | "reference" } {
+  const last = series[series.length - 1];
+  if (last && now - last.t <= maxAgeMs) return { price: last.price, source: "market" };
+  return { price: referencePrice, source: "reference" };
+}
+
+export interface Valuation {
+  valueNowUsd: number;
+  priceSource: "market" | "reference";
+  series: { t: number; usd: number }[];
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * What `shares` are worth now and since `sinceMs`. Prices come from Market API candles (hourly, or daily for
+ * older gifts), cleaned of bad prints; "now" falls back to the reference price when candles are stale.
+ */
+export async function valuation(info: StockInfo, shares: number, sinceMs: number, now = Date.now()): Promise<Valuation> {
+  const ageH = Math.max(1, (now - sinceMs) / 3_600_000);
   const bar = ageH > 72 ? "1d" : "1h";
-  const limit = Math.min(200, Math.ceil(bar === "1d" ? ageH / 24 : ageH) + 2);
-  const candles = await getCandles("56", info.tokenAddress, bar, Math.max(limit, 24)).catch(() => []);
-  return cleanSeries(candles, info.ratio, info.referencePrice).map((p) => ({ t: p.t, usd: Math.round(p.price * shares * 100) / 100 }));
+  const limit = Math.min(200, Math.max(24, Math.ceil(bar === "1d" ? ageH / 24 : ageH) + 2));
+  const candles = await getCandles("56", info.tokenAddress, bar, limit).catch(() => []);
+  const prices = cleanSeries(candles, info.ratio, info.referencePrice);
+  const p = pickPriceNow(prices, info.referencePrice, now);
+  return { valueNowUsd: round2(shares * p.price), priceSource: p.source, series: prices.map((x) => ({ t: x.t, usd: round2(x.price * shares) })) };
 }

@@ -8,7 +8,7 @@ import { isAddress } from "viem";
 import { getDb } from "../db/pool.js";
 import { beginClaim, giftsClaimedBy, verifyClaimCode, type ClaimFailure, type Gift } from "../gifts/ledger.js";
 import { advanceInBackground } from "../execution/advance.js";
-import { sharesOf, stockInfo, valueSeries, type StockInfo } from "../claims/stock.js";
+import { sharesOf, stockInfo, valuation, type StockInfo } from "../claims/stock.js";
 import { rawBalances } from "../binance/wallet.js";
 
 export const claims = new Hono();
@@ -22,6 +22,8 @@ function db503() {
     return null;
   }
 }
+
+const STUCK_CLAIM_MS = 90_000;
 
 const CLAIM_ERRORS: Record<ClaimFailure, { status: 400 | 404 | 409 | 410 | 429; message: string }> = {
   RATE_LIMITED: { status: 429, message: "Too many tries. Wait 15 minutes, then open the link again." },
@@ -66,9 +68,15 @@ claims.post("/claims/:id/view", async (c) => {
     return c.json({ ok: false, reason: checked.reason, error: e.message }, e.status);
   }
   const g = checked.gift;
+
+  // A payout interrupted mid-way (e.g. a restart) resumes when anyone looks at the gift. Vault transfers are
+  // recorded before broadcast, so this can only finish the same transfer, never send a second one.
+  if (g.status === "CLAIMING" && Date.now() - g.updatedAt.getTime() > STUCK_CLAIM_MS) advanceInBackground(db, g.id);
+
   const info = await stockInfo(g.tokenAddress).catch(() => null);
   const shares = giftShares(g, info);
-  const series = info && shares ? await valueSeries(info, shares, (g.readyAt ?? g.createdAt).getTime()).catch(() => []) : [];
+  const v = info && shares ? await valuation(info, shares, (g.readyAt ?? g.createdAt).getTime()).catch(() => null) : null;
+  const claimed = g.status === "CLAIMING" || g.status === "CLAIMED";
   return c.json({
     ok: true,
     gift: {
@@ -80,14 +88,19 @@ claims.post("/claims/:id/view", async (c) => {
       ticker: g.ticker,
       usdSent: g.usdCost,
       shares,
-      valueNowUsd: info && shares ? Math.round(shares * info.referencePrice * 100) / 100 : null,
+      valueNowUsd: v?.valueNowUsd ?? (info && shares ? Math.round(shares * info.referencePrice * 100) / 100 : null),
+      priceSource: v?.priceSource ?? "reference",
       sentAt: g.createdAt,
       claimExpiresAt: g.claimExpiresAt,
+      expired: g.status === "READY" && !!g.claimExpiresAt && g.claimExpiresAt.getTime() <= Date.now(),
+      // Why the last claim didn't go through (set when a payout's simulation fails and the gift goes back to READY).
+      claimError: g.status === "READY" ? g.failureReason : null,
+      claimAddress: claimed ? g.claimAddress : null,
       claimTx: g.claimTx && /^0x[0-9a-fA-F]{64}$/.test(g.claimTx) ? g.claimTx : null,
       dryRun: g.dryRun,
     },
     stock: stockCard(info),
-    series,
+    series: v?.series ?? [],
   });
 });
 
@@ -132,17 +145,19 @@ claims.get("/holdings/:address", async (c) => {
       const raw = balances?.get(token) ?? null;
       const shares = info && raw !== null ? sharesOf(raw, info.decimals, info.ratio) : null;
       const since = Math.min(...gifts.map((g) => (g.claimedAt ?? g.updatedAt).getTime()));
+      const v = info && shares ? await valuation(info, shares, since).catch(() => null) : null;
       return {
         ticker: gifts[0]!.ticker,
         tokenAddress: info?.tokenAddress ?? token,
         stock: stockCard(info),
         shares,
-        valueNowUsd: info && shares !== null ? Math.round(shares * info.referencePrice * 100) / 100 : null,
+        valueNowUsd: v?.valueNowUsd ?? (info && shares !== null ? Math.round(shares * info.referencePrice * 100) / 100 : null),
+        priceSource: v?.priceSource ?? "reference",
         receivedUsd: gifts.reduce((s, g) => s + g.usdCost, 0),
         giftsReceived: gifts.length,
         claimPending: gifts.some((g) => g.status === "CLAIMING"),
         dryRun: gifts.every((g) => g.dryRun),
-        series: info && shares ? await valueSeries(info, shares, since).catch(() => []) : [],
+        series: v?.series ?? [],
       };
     }),
   );

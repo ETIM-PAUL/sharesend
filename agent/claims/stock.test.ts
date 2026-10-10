@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanSeries, sharesOf } from "./stock.js";
+import { cleanSeries, pickPriceNow, sharesOf } from "./stock.js";
 
 const c = (time: number, close: number) => ({ open: close, high: close, low: close, close, volume: 1, time, trades: 1 });
 
@@ -25,5 +25,16 @@ describe("cleanSeries", () => {
 describe("sharesOf", () => {
   it("applies the token-to-share ratio", () => {
     expect(sharesOf(20_000_000_000_000_000n, 18, 1.0007782237528078)).toBeCloseTo(0.0200156, 6);
+  });
+});
+
+describe("pickPriceNow", () => {
+  const now = 10 * 3_600_000;
+  it("uses the latest Market API price when it's recent", () => {
+    expect(pickPriceNow([{ t: now - 7_200_001, price: 1 }, { t: now - 600_000, price: 231 }], 230, now)).toEqual({ price: 231, source: "market" });
+  });
+  it("falls back to the reference price when candles are stale or missing", () => {
+    expect(pickPriceNow([{ t: now - 3 * 3_600_000, price: 231 }], 230, now)).toEqual({ price: 230, source: "reference" });
+    expect(pickPriceNow([], 230, now)).toEqual({ price: 230, source: "reference" });
   });
 });

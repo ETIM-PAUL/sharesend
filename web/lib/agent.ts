@@ -176,8 +176,12 @@ export interface ClaimViewData {
     usdSent: number;
     shares: number | null;
     valueNowUsd: number | null;
+    priceSource: "market" | "reference";
     sentAt: string;
     claimExpiresAt: string | null;
+    expired: boolean;
+    claimError: string | null;
+    claimAddress: string | null;
     claimTx: string | null;
     dryRun: boolean;
   };
@@ -191,6 +195,7 @@ export interface Holding {
   stock: StockCard | null;
   shares: number | null;
   valueNowUsd: number | null;
+  priceSource: "market" | "reference";
   receivedUsd: number;
   giftsReceived: number;
   claimPending: boolean;
