@@ -63,3 +63,20 @@ npm run cli -- admin run-job <SERVER_URL> reconcile
 ```
 
 `ADMIN_TOKEN` must be set both in `.env` and on the server.
+
+## When a gift comes back: stock or USDT
+
+Each gift has a `return_as` setting, chosen by the sender:
+- **stock** (default): the stock goes back to the sender's wallet as the same token.
+- **usdt**: the agent sells it and sends USDT to the sender.
+
+**It happens automatically.** When a claim window ends, the `expiry-returns` job returns the gift using the saved choice. The sender can set it when creating the gift and change it any time before the return starts (one wallet signature on the gift page). When cancelling a ready gift, the sender picks stock or USDT for that cancel.
+
+**USDT path:** vault → Agentic Wallet (stock) → `baw` sell → proceeds sent to the vault → vault pays the sender exactly what arrived. Every step is recorded before it happens and resumes where it stopped.
+
+**It can never leave a gift stuck:**
+- Before anything moves, if the wallet is signed out or no sell quote is available (market closed), it waits and retries. After 24 hours (`RETURN_WAIT_MS`) it returns the stock instead.
+- If the sale is refused or fails after the stock reached the Agentic Wallet, the stock is sent back to the vault and returned to the sender.
+- The two sell quotes (`baw` and the Trading API) must agree within `MAX_QUOTE_DRIFT_PCT`, as for buys.
+
+**Not yet tried live:** selling a stock token with `baw market-order swap` (only the quote has been checked, and `--fromTokenQty` units for bStocks, which have a display multiplier, are unconfirmed). The Phase 11 rehearsal should include one cancel-as-USDT.

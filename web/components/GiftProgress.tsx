@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { agent, type PublicGift } from "@/lib/agent";
+import { usd } from "@/lib/format";
 
 const TERMINAL = new Set(["CLAIMED", "EXPIRED", "REFUNDED", "RETURNED"]);
 
@@ -62,9 +63,14 @@ function steps(g: PublicGift): { label: string; detail?: string; state: StepStat
 function outcome(g: PublicGift): string | null {
   switch (g.status) {
     case "RETURNING":
-      return "Cancelled. The stock is on its way back to your wallet.";
+      return g.returnAs === "usdt" ? "Cancelled. The stock is being sold and the USDT will be sent to your wallet." : "Cancelled. The stock is on its way back to your wallet.";
     case "RETURNED":
-      return "Cancelled. The stock is back in your wallet.";
+      return [
+        g.returnedUsdt != null ? `The stock was sold and ${usd(g.returnedUsdt)} in USDT is back in your wallet.` : "The stock is back in your wallet.",
+        g.failureReason && /instead/.test(g.failureReason) ? g.failureReason : null,
+      ]
+        .filter(Boolean)
+        .join(" ");
     case "FAILED":
     case "REFUNDING":
       return `The purchase didn't go through${g.failureReason ? ` (${g.failureReason})` : ""}. Your payment is being refunded.`;

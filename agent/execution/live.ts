@@ -55,6 +55,17 @@ export function liveWallet(): AgenticWalletPort {
     async sendToVault(token, amountHuman) {
       return (await baw.send({ tokenAddress: token, recipient: vault, amount: amountHuman })).txHash;
     },
+    async quoteSellOut(fromToken, amountHuman) {
+      const q = await baw.quote({ fromToken, toToken: USDT_BSC.address, fromTokenQty: amountHuman });
+      return parseUnits(q.toCoinAmount, USDT_BSC.decimals);
+    },
+    async submitSell(fromToken, amountHuman, slippagePct) {
+      return (await baw.swap({ fromToken, toToken: USDT_BSC.address, fromTokenQty: amountHuman, slippagePct })).orderId;
+    },
+    async findSellSince(fromToken, sinceMs) {
+      const orders = await baw.listOrders({ fromToken, startTime: sinceMs });
+      return orders.find((x) => x.toToken.toLowerCase() === USDT_BSC.address.toLowerCase() && x.status !== "FAILED")?.orderId ?? null;
+    },
     async findSendSince(token, sinceMs) {
       for (const tx of await baw.txHistory({ startTime: sinceMs }))
         for (const h of tx.txHashList ?? [])
@@ -67,6 +78,16 @@ export function liveWallet(): AgenticWalletPort {
 
 export function liveMarket(walletAddress: string): MarketPort {
   return {
+    async apiSellQuoteOut(fromToken, rawAmount) {
+      const { quote } = await getQuote({
+        binanceChainId: BSC_CHAIN_ID,
+        fromTokenAddress: fromToken,
+        toTokenAddress: USDT_BSC.address,
+        amount: rawAmount,
+        userWalletAddress: walletAddress,
+      });
+      return BigInt(quote.toTokenAmount);
+    },
     async apiQuoteOut(toToken, usd) {
       const { quote } = await getQuote({
         binanceChainId: BSC_CHAIN_ID,
@@ -84,6 +105,7 @@ export function liveMarket(walletAddress: string): MarketPort {
 export function dryRunWalletAndChain(real: AgenticWalletPort): { wallet: AgenticWalletPort; chain: ChainPort } {
   const amounts = new Map<string, bigint>(); // synthetic tx hash → raw amount moved
   const lastSwap = new Map<string, bigint>(); // token → raw amount "bought"
+  let lastSell = 0n; // USDT "received" from the last sell
   let n = 0;
   const wallet: AgenticWalletPort = {
     address: real.address,
@@ -96,14 +118,23 @@ export function dryRunWalletAndChain(real: AgenticWalletPort): { wallet: Agentic
       lastSwap.set(toToken.toLowerCase(), out);
       return id;
     },
-    getOrder: async (orderId) => ({ status: "FINISHED", txHash: `dryrun:swap:${orderId}` }),
+    getOrder: async (orderId) => ({ status: "FINISHED", txHash: orderId.startsWith("dryrun-sell") ? `dryrun:sell:${orderId}` : `dryrun:swap:${orderId}` }),
     findOrderSince: async () => null,
     async sendToVault(token, amountHuman) {
       const hash = `dryrun:send:${++n}`;
-      amounts.set(hash, lastSwap.get(token.toLowerCase()) ?? parseUnits(amountHuman, 18));
+      amounts.set(hash, token.toLowerCase() === USDT_BSC.address.toLowerCase() ? lastSell || parseUnits(amountHuman, 18) : (lastSwap.get(token.toLowerCase()) ?? parseUnits(amountHuman, 18)));
       return hash;
     },
     findSendSince: async () => null,
+    quoteSellOut: (token, amountHuman) => real.quoteSellOut(token, amountHuman),
+    async submitSell(fromToken, amountHuman) {
+      const out = await real.quoteSellOut(fromToken, amountHuman);
+      const id = `dryrun-sell-${++n}`;
+      amounts.set(`dryrun:sell:${id}`, out);
+      lastSell = out;
+      return id;
+    },
+    findSellSince: async () => null,
   };
   const chain: ChainPort = {
     async transferIn(hash, token, to) {

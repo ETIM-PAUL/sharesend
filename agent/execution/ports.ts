@@ -2,7 +2,7 @@
 // key and BSC; dry-run implementations quote and simulate only; tests use fakes.
 import type { TxState } from "../chain/bsc.js";
 
-export type ExecKind = "forward" | "swap" | "vault_send" | "sweep" | "claim" | "return" | "refund";
+export type ExecKind = "forward" | "swap" | "vault_send" | "sweep" | "claim" | "return" | "refund" | "to_wallet" | "sell" | "proceeds" | "cashout" | "unwind";
 
 /** The Agentic Wallet (trading engine). It can only send to its address book, i.e. the vault. */
 export interface AgenticWalletPort {
@@ -17,6 +17,12 @@ export interface AgenticWalletPort {
   sendToVault(token: string, amountHuman: string): Promise<string>;
   /** A send of `token` to the vault at or after `sinceMs`: adopts a send whose txHash was lost in a crash. */
   findSendSince(token: string, sinceMs: number): Promise<string | null>;
+  /** Expected USDT out (raw units) for selling `amountHuman` of `fromToken`. */
+  quoteSellOut(fromToken: string, amountHuman: string): Promise<bigint>;
+  /** Submits a market sell of `fromToken` into USDT. */
+  submitSell(fromToken: string, amountHuman: string, slippagePct: number): Promise<string>;
+  /** A sell of `fromToken` submitted at or after `sinceMs`: adopts an order whose orderId was lost in a crash. */
+  findSellSince(fromToken: string, sinceMs: number): Promise<string | null>;
 }
 
 export interface ChainPort {
@@ -26,11 +32,13 @@ export interface ChainPort {
 export interface MarketPort {
   /** Trading API best-quote output in raw token units for `usd` USDT. */
   apiQuoteOut(toToken: string, usd: number): Promise<bigint>;
+  /** Trading API best-quote USDT output (raw units) for selling `rawAmount` of `fromToken`. */
+  apiSellQuoteOut(fromToken: string, rawAmount: bigint): Promise<bigint>;
 }
 
 export interface VaultTransfer {
   giftId: string;
-  kind: Extract<ExecKind, "forward" | "claim" | "return" | "refund">;
+  kind: Extract<ExecKind, "forward" | "claim" | "return" | "refund" | "to_wallet" | "cashout">;
   token: string;
   to: string;
   amount: bigint;

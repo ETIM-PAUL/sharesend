@@ -15,6 +15,8 @@ export interface OpenGiftInput {
   senderName: string;
   recipientName: string;
   message?: string;
+  /** If the gift comes back to the sender: the stock itself (default) or USDT from selling it. */
+  returnAs?: "stock" | "usdt";
 }
 
 export type OpenGiftResult =
@@ -52,6 +54,7 @@ export async function openGift(db: Db, input: OpenGiftInput, dailyUsedUsd: numbe
         quoteId: q.quote.quoteId,
         paymentExpiresAt: new Date(Date.now() + PAYMENT_TIMEOUT_SECONDS * 1000),
         dryRun: !config.liveTrading,
+        returnAs: input.returnAs === "usdt" ? "usdt" : "stock",
         paymentRequirements: accepts,
       },
       { maxGiftUsd: config.maxGiftUsd, dailyCapUsd: config.dailyCapUsd },

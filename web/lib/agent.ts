@@ -30,6 +30,10 @@ export interface PublicGift {
   createdAt: string;
   dryRun: boolean;
   failureReason: string | null;
+  /** How the gift comes back to the sender if it isn't claimed or is cancelled. */
+  returnAs: "stock" | "usdt";
+  /** USDT the sender received after the stock was sold (when it was), else null. */
+  returnedUsdt?: number | null;
   txs: Partial<Record<"payment" | "buy" | "vault" | "claim" | "return" | "refund", string>>;
 }
 
@@ -117,7 +121,7 @@ export const agent = {
   },
 
   /** Creates the gift. The agent answers 402 Payment Required with what it accepts. */
-  async openGift(input: { ticker: string; usd: number; senderAddress: string; senderName: string; recipientName: string; message: string }) {
+  async openGift(input: { ticker: string; usd: number; senderAddress: string; senderName: string; recipientName: string; message: string; returnAs?: "stock" | "usdt" }) {
     const r = await call<{ gift: PublicGift; accepts: PaymentRequirement[]; resource: Draft["resource"]; error?: string }>(
       "/gifts",
       { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input) },
@@ -136,19 +140,30 @@ export const agent = {
       headers: { "PAYMENT-SIGNATURE": paymentHeader },
     }),
 
-  gift: (id: string) => call<{ gift: PublicGift }>(`/gifts/${id}`).then((r) => r.gift),
+  gift: (id: string) => call<{ gift: PublicGift; returnedUsdt: number | null }>(`/gifts/${id}`).then((r) => ({ ...r.gift, returnedUsdt: r.returnedUsdt })),
 
-  senderAction: (id: string, action: "cancel" | "link", message: string, signature: string) =>
-    call<{ ok: true; gift?: PublicGift; claimUrl?: string }>(`/gifts/${id}/${action}`, {
+  senderAction: (id: string, action: SenderActionName, message: string, signature: string) =>
+    call<{ ok: true; gift?: PublicGift; claimUrl?: string; returnAs?: "stock" | "usdt" }>(`/gifts/${id}/${action.startsWith("cancel") ? "cancel" : action.startsWith("return") ? "return-as" : "link"}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ message, signature }),
     }),
 };
 
+export type SenderActionName = "cancel" | "cancel-stock" | "cancel-usdt" | "link" | "return-stock" | "return-usdt";
+
 /** Must match agent/gifts/senderAuth.ts exactly. */
-export function senderMessage(action: "cancel" | "link", giftId: string, isoTime: string): string {
-  return `ShareSend\n${action === "cancel" ? "Cancel this gift" : "Get a new claim link"}\nGift: ${giftId}\nTime: ${isoTime}`;
+const ACTION_TEXT: Record<SenderActionName, string> = {
+  cancel: "Cancel this gift",
+  "cancel-stock": "Cancel this gift and get the stock back",
+  "cancel-usdt": "Cancel this gift and get USDT back",
+  link: "Get a new claim link",
+  "return-stock": "If this gift is not claimed, return the stock to me",
+  "return-usdt": "If this gift is not claimed, sell it and return USDT to me",
+};
+
+export function senderMessage(action: SenderActionName, giftId: string, isoTime: string): string {
+  return `ShareSend\n${ACTION_TEXT[action]}\nGift: ${giftId}\nTime: ${isoTime}`;
 }
 
 // ---- Recipient side ----

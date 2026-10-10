@@ -5,10 +5,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { getAddress, parseUnits } from "viem";
 import type { Db } from "../db/pool.js";
 import { freshTestDb } from "../db/testDb.js";
-import { beginClaim, createGift, getGift, transition } from "../gifts/ledger.js";
+import { beginClaim, createGift, getGift, setReturnAs, transition } from "../gifts/ledger.js";
 import { runBuy, type ExecConfig, type ExecDeps } from "./buy.js";
 import { payoutClaim, refundGift, returnGift } from "./payouts.js";
+import { RETURN_WAIT_MS } from "./cashout.js";
+import { liabilities } from "../gifts/reconcile.js";
 import { createVault, type VaultBackend } from "./vault.js";
+import { BawError } from "../baw/cli.js";
 import { NeedsGasError, type AgenticWalletPort, type ChainPort, type MarketPort } from "./ports.js";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -44,7 +47,37 @@ class FakeWallet implements AgenticWalletPort {
   swapOut = QUOTED;
   crashAfterSwap = false;
   crashAfterSend = false;
+  // selling
+  sellOut = parseUnits("5", 18); // USDT received for the stock
+  sellQuote = parseUnits("5", 18);
+  sellStatus: "FINISHED" | "FAILED" = "FINISHED";
+  sellRefused = false;
+  sellQuoteThrows = false;
+  crashAfterSell = false;
+  sellCalls = 0;
+  sells = new Map<string, { status: "FINISHED" | "FAILED"; txHash: string | null; fromToken: string; at: number }>();
   constructor(private chain: FakeChain) {}
+  async quoteSellOut() {
+    if (this.sellQuoteThrows) throw new Error("market closed");
+    return this.sellQuote;
+  }
+  async submitSell(fromToken: string) {
+    if (this.sellRefused) throw new BawError("baw market-order swap: refused for this token", "cli", 315008, "SERVICE_ERROR");
+    this.sellCalls++;
+    const id = `sell-${this.sellCalls}`;
+    const txHash = `0xsell${this.sellCalls}`;
+    this.sells.set(id, { status: this.sellStatus, txHash: this.sellStatus === "FAILED" ? null : txHash, fromToken, at: Date.now() });
+    if (this.sellStatus !== "FAILED") this.chain.txs.set(txHash, { state: "success", token: USDT, to: AW, amount: this.sellOut });
+    if (this.crashAfterSell) {
+      this.crashAfterSell = false;
+      throw new Error("process crashed after submitting the sell");
+    }
+    return id;
+  }
+  async findSellSince(fromToken: string, since: number) {
+    for (const [id, o] of this.sells) if (o.fromToken === fromToken && o.at >= since && o.status !== "FAILED") return id;
+    return null;
+  }
   async isConnected() {
     return this.connected;
   }
@@ -64,7 +97,7 @@ class FakeWallet implements AgenticWalletPort {
     return id;
   }
   async getOrder(id: string) {
-    const o = this.orders.get(id);
+    const o = this.orders.get(id) ?? this.sells.get(id);
     return o ? { status: o.status, txHash: o.txHash } : null;
   }
   async findOrderSince(toToken: string, since: number) {
@@ -122,6 +155,10 @@ class FakeBackend implements VaultBackend {
 
 class FakeMarket implements MarketPort {
   out = QUOTED;
+  sellOut = parseUnits("5", 18);
+  async apiSellQuoteOut() {
+    return this.sellOut;
+  }
   async apiQuoteOut() {
     return this.out;
   }
@@ -408,6 +445,151 @@ describe.skipIf(!url)("execution pipeline (Postgres + fakes)", () => {
       await Promise.allSettled(ids.map((g) => runBuy(d, g.id)));
       const nonces = (await db.query("SELECT nonce FROM exec_records WHERE kind = 'forward' AND gift_id = ANY($1)", [ids.map((g) => g.id)])).rows.map((r) => r.nonce);
       expect(new Set(nonces).size).toBe(3);
+    });
+  });
+
+  describe("return as USDT", () => {
+    const SELL = parseUnits("5", 18);
+
+    async function readyUsdtGift(returnAs: "stock" | "usdt" = "usdt") {
+      const { id } = await paidGift(5);
+      await runBuy(d, id);
+      if (returnAs === "usdt") expect(await setReturnAs(db, id, "usdt")).toBe(true);
+      return id;
+    }
+    const kinds = () => backend.signed.map((x) => `${x.token === USDT ? "usdt" : "stock"}→${x.to === AW ? "AW" : x.to === SENDER ? "sender" : x.to}`);
+    const age = (id: string, ms: number) => db.query("UPDATE gift_events SET at = at - ($2 || ' milliseconds')::interval WHERE gift_id = $1 AND to_status = 'RETURNING'", [id, ms]);
+
+    it("sells the stock and pays the sender USDT", async () => {
+      const id = await readyUsdtGift();
+      const r = await returnGift(d, id);
+      expect(r.status).toBe("RETURNED");
+      const g = (await getGift(db, id))!;
+      expect(g.status).toBe("RETURNED");
+      expect(g.returnTx).toBe(backend.signed.at(-1)!.hash);
+      expect(kinds()).toEqual(["usdt→AW", "stock→AW", "usdt→sender"]); // forward (buy), stock to wallet, cash out
+      expect(backend.signed.at(-1)).toMatchObject({ token: USDT, to: SENDER, amount: SELL });
+      expect(wallet.sellCalls).toBe(1);
+      expect(wallet.sends.map((x) => x.token)).toEqual([TOKEN, USDT]); // buy→vault, then proceeds→vault
+      expect(await records(id)).toMatchObject({ to_wallet: "confirmed", sell: "confirmed", proceeds: "confirmed", cashout: "confirmed" });
+    });
+
+    it("pays out exactly what the sale returned", async () => {
+      const id = await readyUsdtGift();
+      wallet.sellOut = parseUnits("4.87", 18);
+      market.sellOut = parseUnits("4.87", 18);
+      wallet.sellQuote = parseUnits("4.87", 18);
+      await returnGift(d, id);
+      expect(backend.signed.at(-1)!.amount).toBe(parseUnits("4.87", 18));
+    });
+
+    it("a gift left on the default still returns the stock", async () => {
+      const id = await readyUsdtGift("stock");
+      expect((await returnGift(d, id)).status).toBe("RETURNED");
+      expect(kinds().at(-1)).toBe("stock→sender");
+      expect(wallet.sellCalls).toBe(0);
+    });
+
+    it("waits while the trading wallet is signed out, then returns the stock after 24 hours", async () => {
+      const id = await readyUsdtGift();
+      wallet.connected = false;
+      expect(await returnGift(d, id)).toMatchObject({ status: "PENDING", reason: expect.stringContaining("signed out") });
+      expect(backend.signed).toHaveLength(1); // nothing moved
+      await age(id, RETURN_WAIT_MS + 60_000);
+      const r = await returnGift(d, id);
+      expect(r.status).toBe("RETURNED");
+      expect(kinds().at(-1)).toBe("stock→sender");
+      expect((await getGift(db, id))!.failureReason).toMatch(/returned as stock instead/);
+    });
+
+    it("waits when there is no sell quote, and the sender can still switch to stock", async () => {
+      const id = await readyUsdtGift();
+      wallet.sellQuoteThrows = true;
+      expect(await returnGift(d, id)).toMatchObject({ status: "PENDING", reason: expect.stringContaining("no sell quote") });
+      expect(await setReturnAs(db, id, "stock")).toBe(true);
+      expect((await returnGift(d, id)).status).toBe("RETURNED");
+      expect(kinds().at(-1)).toBe("stock→sender");
+    });
+
+    it("won't sell when the two quotes disagree", async () => {
+      const id = await readyUsdtGift();
+      market.sellOut = parseUnits("4.5", 18); // baw says 5.0: 10% apart
+      expect(await returnGift(d, id)).toMatchObject({ status: "PENDING", reason: expect.stringContaining("disagree") });
+      expect(backend.signed).toHaveLength(1);
+    });
+
+    it("if the sale is refused after the stock moved, it comes back and is returned as stock", async () => {
+      const id = await readyUsdtGift();
+      wallet.sellRefused = true;
+      const r = await returnGift(d, id);
+      expect(r.status).toBe("RETURNED");
+      expect(kinds()).toEqual(["usdt→AW", "stock→AW", "stock→sender"]);
+      expect(wallet.sends.map((x) => x.token)).toEqual([TOKEN, TOKEN]); // buy→vault, then unsold stock→vault
+      expect(await records(id)).toMatchObject({ to_wallet: "confirmed", sell: "failed", unwind: "confirmed", return: "confirmed" });
+      expect((await getGift(db, id))!.failureReason).toMatch(/refused/);
+    });
+
+    it("a failed sell order unwinds the same way", async () => {
+      const id = await readyUsdtGift();
+      wallet.sellStatus = "FAILED";
+      expect((await returnGift(d, id)).status).toBe("RETURNED");
+      expect(kinds().at(-1)).toBe("stock→sender");
+      expect(await records(id)).toMatchObject({ sell: "failed", unwind: "confirmed" });
+    });
+
+    it("resumes after a crash right after submitting the sell, without selling twice", async () => {
+      const id = await readyUsdtGift();
+      wallet.crashAfterSell = true;
+      await expect(returnGift(d, id)).rejects.toThrow(/crashed/);
+      expect((await returnGift(d, id)).status).toBe("RETURNED");
+      expect(wallet.sellCalls).toBe(1);
+      expect(backend.signed.at(-1)).toMatchObject({ token: USDT, to: SENDER });
+    });
+
+    it("resumes after a crash right after sending the proceeds, without sending twice", async () => {
+      const id = await readyUsdtGift();
+      const orig = wallet.sendToVault.bind(wallet);
+      let first = true;
+      wallet.sendToVault = async (token, amt) => {
+        const h = await orig(token, amt);
+        if (token === USDT && first) {
+          first = false;
+          throw new Error("process crashed after sending proceeds");
+        }
+        return h;
+      };
+      await expect(returnGift(d, id)).rejects.toThrow(/crashed/);
+      expect((await returnGift(d, id)).status).toBe("RETURNED");
+      expect(wallet.sends.filter((x) => x.token === USDT)).toHaveLength(1);
+    });
+
+    it("signed out after the stock reached the wallet: queued, then finishes after sign-in", async () => {
+      const id = await readyUsdtGift();
+      const orig = wallet.isConnected.bind(wallet);
+      let calls = 0;
+      wallet.isConnected = async () => (++calls <= 1 ? orig() : false); // connected for the pre-check, then signed out
+      expect(await returnGift(d, id)).toMatchObject({ status: "QUEUED" });
+      expect(await records(id)).toMatchObject({ to_wallet: "confirmed" });
+      wallet.isConnected = orig;
+      expect((await returnGift(d, id)).status).toBe("RETURNED");
+      expect(wallet.sellCalls).toBe(1);
+    });
+
+    it("the choice can't change once the stock has left the vault", async () => {
+      const id = await readyUsdtGift();
+      wallet.crashAfterSell = true;
+      await expect(returnGift(d, id)).rejects.toThrow(/crashed/);
+      expect(await setReturnAs(db, id, "stock")).toBe(false);
+      expect((await getGift(db, id))!.returnAs).toBe("usdt");
+    });
+
+    it("stock in the Agentic Wallet isn't counted as held by the vault until it's unwound", async () => {
+      const id = await readyUsdtGift();
+      const count = async () => (await liabilities(db)).reduce((n, l) => n + l.gifts, 0); // other tests leave gifts in this schema
+      const before = await count();
+      wallet.crashAfterSell = true;
+      await expect(returnGift(d, id)).rejects.toThrow(/crashed/);
+      expect(await count()).toBe(before - 1);
     });
   });
 });

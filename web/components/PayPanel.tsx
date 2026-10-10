@@ -19,6 +19,7 @@ interface Props {
   senderName: string;
   recipientName: string;
   message: string;
+  returnAs: "stock" | "usdt";
   onPaid: (r: PaidResult) => void;
   onExpired: () => void;
 }
@@ -26,7 +27,7 @@ interface Props {
 const isEmbedded = (w: ConnectedWallet) => w.walletClientType.startsWith("privy");
 
 /** Sign in (Privy), open the gift, pick a stablecoin, approve once if needed, sign, pay. */
-export function PayPanel({ ticker, amountUsd, senderName, recipientName, message, onPaid, onExpired }: Props) {
+export function PayPanel({ ticker, amountUsd, senderName, recipientName, message, returnAs, onPaid, onExpired }: Props) {
   const { ready, authenticated, login } = usePrivy();
   const { wallets, ready: walletsReady } = useWallets();
   const [chosen, setChosen] = useState<string | null>(null);
@@ -74,7 +75,7 @@ export function PayPanel({ ticker, amountUsd, senderName, recipientName, message
     if (!walletAddress || openedFor.current === walletAddress) return;
     openedFor.current = walletAddress;
     agent
-      .openGift({ ticker, usd: amountUsd, senderAddress: walletAddress, senderName, recipientName, message })
+      .openGift({ ticker, usd: amountUsd, senderAddress: walletAddress, senderName, recipientName, message, returnAs })
       .then((r) => {
         if (openedFor.current !== walletAddress) return;
         const opened = { gift: r.gift, accepts: r.accepts, from: walletAddress };
@@ -86,7 +87,7 @@ export function PayPanel({ ticker, amountUsd, senderName, recipientName, message
         openedFor.current = null;
         setError((e as Error).message);
       });
-  }, [walletAddress, ticker, amountUsd, senderName, recipientName, message, loadDrafts]);
+  }, [walletAddress, ticker, amountUsd, senderName, recipientName, message, returnAs, loadDrafts]);
 
   const provider = async (): Promise<Eip1193> => {
     if (!wallet) throw new Error("Connect a wallet first");

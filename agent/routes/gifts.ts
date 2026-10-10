@@ -6,13 +6,14 @@
 //   GET /gifts/:id              public status (no sender address, no message, no codes)
 //   POST /gifts/:id/cancel      {message, signature} signed by the sender → expire / refund / return
 //   POST /gifts/:id/link        {message, signature} signed by the sender → new claim link (old one stops working)
+//   POST /gifts/:id/return-as   {message, signature} signed by the sender → "stock" or "usdt" if the gift comes back
 //   GET /search?q=              tokenized stocks on BSC by ticker or company name
 //   GET /economics              self-funding ledger summary
 import { Hono, type Context } from "hono";
 import { config } from "../config.js";
 import { getDb } from "../db/pool.js";
-import { dailyUsedUsd, getGift, reissueClaimCode, type Gift } from "../gifts/ledger.js";
-import { verifySender, type SenderAction } from "../gifts/senderAuth.js";
+import { dailyUsedUsd, getGift, reissueClaimCode, setReturnAs, type Gift } from "../gifts/ledger.js";
+import { actionOf, verifySender, type SenderAction } from "../gifts/senderAuth.js";
 import { publicClient } from "../chain/bsc.js";
 import { searchTickers } from "../binance/rwa.js";
 import { cancelGift } from "../execution/cancel.js";
@@ -63,6 +64,7 @@ function publicGift(g: Gift) {
     paymentExpiresAt: g.paymentExpiresAt,
     claimExpiresAt: g.claimExpiresAt,
     createdAt: g.createdAt,
+    returnAs: g.returnAs,
     dryRun: g.dryRun,
     failureReason: g.failureReason,
     // Public on-chain anyway; real hashes only (dry runs use synthetic ones).
@@ -206,34 +208,50 @@ gifts.get("/gifts/:id", async (c) => {
   const db = dbOr503(c);
   if (!db) return c.json({ ok: false, error: "database not configured" }, 503);
   const g = await getGift(db, c.req.param("id"));
-  return g ? c.json({ ok: true, gift: publicGift(g) }) : c.json({ ok: false, error: "gift not found" }, 404);
+  if (!g) return c.json({ ok: false, error: "gift not found" }, 404);
+  // What the sender got back when it was sold: USDT sent to them (raw units, 18 decimals), if that happened.
+  const cash = await db.query<{ amount: string }>("SELECT amount FROM exec_records WHERE gift_id = $1 AND kind = 'cashout' AND status = 'confirmed'", [g.id]);
+  return c.json({ ok: true, gift: publicGift(g), returnedUsdt: cash.rows[0] ? Number(BigInt(cash.rows[0].amount) / 10n ** 14n) / 10_000 : null });
 });
 
 const verifyWithChain = (address: string, message: string, signature: string) =>
   // Handles EOAs and smart-contract wallets (ERC-1271).
   publicClient().verifyMessage({ address: address as `0x${string}`, message, signature: signature as `0x${string}` });
 
-async function senderAction(c: Context, action: SenderAction) {
+/** Checks a sender-signed request. `actions` lists the signed messages the route accepts; returns which one it was. */
+async function senderAction(c: Context, actions: SenderAction[]) {
   if (limited(clientIp(c), 20)) return { res: c.json({ ok: false, error: "too many requests" }, 429) };
   const db = dbOr503(c);
   if (!db) return { res: c.json({ ok: false, error: "database not configured" }, 503) };
   const g = await getGift(db, c.req.param("id")!);
   if (!g) return { res: c.json({ ok: false, error: "gift not found" }, 404) };
   const body = (await c.req.json().catch(() => null)) as { message?: unknown; signature?: unknown } | null;
+  const action = actionOf(body?.message, g.id, actions);
+  if (!action) return { res: c.json({ ok: false, error: "message doesn't match this action and gift" }, 401) };
   const auth = await verifySender(db, g, action, body?.message, body?.signature, verifyWithChain);
   if (!auth.ok) return { res: c.json({ ok: false, error: auth.error }, 401) };
-  return { db, g };
+  return { db, g, action };
 }
 
 gifts.post("/gifts/:id/cancel", async (c) => {
-  const a = await senderAction(c, "cancel");
+  const a = await senderAction(c, ["cancel", "cancel-stock", "cancel-usdt"]);
   if ("res" in a) return a.res;
-  const r = await cancelGift(a.db!, a.g!.id);
+  const returnAs = a.action === "cancel-usdt" ? "usdt" : a.action === "cancel-stock" ? "stock" : undefined;
+  const r = await cancelGift(a.db!, a.g!.id, undefined, returnAs);
   return r.ok ? c.json({ ok: true, gift: publicGift(r.gift) }) : c.json({ ok: false, error: r.error }, r.status);
 });
 
+// How an unclaimed gift comes back to the sender: the stock itself, or sold into USDT. Changeable until the sale starts.
+gifts.post("/gifts/:id/return-as", async (c) => {
+  const a = await senderAction(c, ["return-stock", "return-usdt"]);
+  if ("res" in a) return a.res;
+  const choice = a.action === "return-usdt" ? "usdt" : "stock";
+  if (!(await setReturnAs(a.db!, a.g!.id, choice))) return c.json({ ok: false, error: "it's too late to change this: the return has already started or finished" }, 409);
+  return c.json({ ok: true, returnAs: choice });
+});
+
 gifts.post("/gifts/:id/link", async (c) => {
-  const a = await senderAction(c, "link");
+  const a = await senderAction(c, ["link"]);
   if ("res" in a) return a.res;
   const code = await reissueClaimCode(a.db!, a.g!.id);
   if (!code) return c.json({ ok: false, error: `a new link can't be made while the gift is ${a.g!.status.toLowerCase()}` }, 409);

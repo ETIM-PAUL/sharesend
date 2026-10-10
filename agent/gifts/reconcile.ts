@@ -28,6 +28,9 @@ export async function liabilities(db: Queryable): Promise<Liability[]> {
      FROM gifts
      WHERE token_amount IS NOT NULL AND NOT dry_run
        AND (status = ANY($1) OR (status = 'BUYING' AND step = 'in_vault'))
+       -- Stock sent to the Agentic Wallet for a sell-back isn't in the vault, unless it was unwound back.
+       AND (NOT EXISTS (SELECT 1 FROM exec_records e WHERE e.gift_id = gifts.id AND e.kind = 'to_wallet')
+            OR EXISTS (SELECT 1 FROM exec_records e WHERE e.gift_id = gifts.id AND e.kind = 'unwind' AND e.status = 'confirmed'))
      GROUP BY lower(token_address)
      ORDER BY 1`,
     [VAULT_LIABILITY_STATUSES],

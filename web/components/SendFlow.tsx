@@ -11,6 +11,7 @@ import { PayPanel, type PaidResult } from "./PayPanel";
 import { GiftProgress, useGift } from "./GiftProgress";
 import { ShareCard } from "./ShareCard";
 import { Button, Field, Input, Notice, TextArea } from "./ui";
+import { ReturnChoice, type ReturnAs } from "./ReturnChoice";
 
 const AMOUNTS = [5, 10, 20];
 
@@ -23,6 +24,7 @@ export function SendFlow() {
   const [recipient, setRecipient] = useState("");
   const [message, setMessage] = useState("");
   const [sender, setSender] = useState("");
+  const [returnAs, setReturnAs] = useState<ReturnAs>("stock");
   const [quote, setQuote] = useState<GiftQuote | null>(null);
   const [paid, setPaid] = useState<PaidResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -105,6 +107,8 @@ export function SendFlow() {
             <Input value={sender} onChange={(e) => setSender(e.target.value)} placeholder="Paul" maxLength={60} required />
           </Field>
 
+          <ReturnChoice value={returnAs} onChange={setReturnAs} />
+
           {error ? <Notice kind="error">{error}</Notice> : null}
           <Button type="submit" disabled={!ready || loading}>
             {loading ? "Getting the price…" : "See the price"}
@@ -125,6 +129,7 @@ export function SendFlow() {
           senderName={sender.trim()}
           recipientName={recipient.trim()}
           message={message.trim()}
+          returnAs={returnAs}
           onPaid={onPaid}
           onExpired={() => {
             setError("The held price ran out. Here's a fresh one.");

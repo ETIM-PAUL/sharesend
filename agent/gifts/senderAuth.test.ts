@@ -4,8 +4,8 @@ import { verifyMessage } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import type { Db } from "../db/pool.js";
 import { freshTestDb } from "../db/testDb.js";
-import { createGift, getGift, reissueClaimCode, transition, beginClaim } from "./ledger.js";
-import { senderMessage, verifySender } from "./senderAuth.js";
+import { createGift, getGift, reissueClaimCode, setReturnAs, transition, beginClaim } from "./ledger.js";
+import { actionOf, senderMessage, verifySender } from "./senderAuth.js";
 import { cancelGift } from "../execution/cancel.js";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -20,6 +20,8 @@ describe.skipIf(!url)("sender-signed actions (Postgres)", () => {
   afterAll(async () => {
     await db?.end();
   });
+
+  const set = (id: string, sql: string) => db.query(`UPDATE gifts SET ${sql} WHERE id = $1`, [id]);
 
   async function gift() {
     const sender = privateKeyToAccount(generatePrivateKey());
@@ -100,5 +102,68 @@ describe.skipIf(!url)("sender-signed actions (Postgres)", () => {
     await transition(db, d.gift.id, "AWAITING_PAYMENT", "PAID");
     await transition(db, d.gift.id, "PAID", "BUYING");
     expect(await cancelGift(db, d.gift.id, bg)).toMatchObject({ ok: false, status: 409 });
+  });
+
+  describe("how a gift comes back", () => {
+    it("the signed text names the choice, so one signature can't be replayed as the other", async () => {
+      const { sender, gift: g } = await gift();
+      const iso = new Date().toISOString();
+      const usdtMsg = senderMessage("return-usdt", g.id, iso);
+      const sig = await sender.signMessage({ message: usdtMsg });
+      expect(actionOf(usdtMsg, g.id, ["return-stock", "return-usdt"])).toBe("return-usdt");
+      // The same signature presented with the other choice's text is rejected.
+      const stockMsg = senderMessage("return-stock", g.id, iso);
+      expect(await verifySender(db, g, "return-stock", stockMsg, sig, verify)).toMatchObject({ ok: false, error: expect.stringContaining("not from") });
+      expect(await verifySender(db, g, "return-usdt", usdtMsg, sig, verify)).toEqual({ ok: true });
+      expect(actionOf("ShareSend\nSomething else\nGift: x\nTime: y", g.id, ["cancel"])).toBeNull();
+    });
+
+    it("the default is stock; the choice can be set until the sell-back starts", async () => {
+      const { gift: g } = await gift();
+      expect((await getGift(db, g.id))!.returnAs).toBe("stock");
+      expect(await setReturnAs(db, g.id, "usdt")).toBe(true);
+      expect((await getGift(db, g.id))!.returnAs).toBe("usdt");
+      await db.query("INSERT INTO exec_records (gift_id, kind, status) VALUES ($1, 'to_wallet', 'confirmed')", [g.id]);
+      expect(await setReturnAs(db, g.id, "stock")).toBe(false);
+    });
+
+    it("can't be changed after the gift is claimed or returned", async () => {
+      const { gift: g } = await gift();
+      await db.query("UPDATE gifts SET status = 'CLAIMED', claim_address = '0x1', token_amount = 1, claim_expires_at = now() + interval '1 day' WHERE id = $1", [g.id]);
+      expect(await setReturnAs(db, g.id, "usdt")).toBe(false);
+    });
+
+    it("cancelling a ready gift with a choice saves it, then starts the return", async () => {
+      const started: string[] = [];
+      const { gift: g } = await gift();
+      await transition(db, g.id, "AWAITING_PAYMENT", "PAID");
+      await set(g.id, "status = 'READY', token_amount = 1, claim_expires_at = now() + interval '1 day'");
+      const r = await cancelGift(db, g.id, (_db, id) => void started.push(id), "usdt");
+      expect(r.ok && r.gift.status).toBe("RETURNING");
+      expect((await getGift(db, g.id))!.returnAs).toBe("usdt");
+      expect(started).toEqual([g.id]);
+    });
+
+    it("a gift is created with the sender's choice", async () => {
+      const { gift: g } = await createGift(
+        db,
+        {
+          senderAddress: privateKeyToAccount(generatePrivateKey()).address,
+          senderName: "Paul",
+          recipientName: "Ada",
+          ticker: "NVDA",
+          issuer: "bstock",
+          tokenAddress: "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+          tokenDecimals: 18,
+          quotedTokenAmount: 10n ** 16n,
+          usdCost: 5,
+          feeUsd: 0.1,
+          paymentExpiresAt: new Date(Date.now() + 300_000),
+          returnAs: "usdt",
+        },
+        { maxGiftUsd: 20, dailyCapUsd: 1e9 },
+      );
+      expect(g.returnAs).toBe("usdt");
+    });
   });
 });

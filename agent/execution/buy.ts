@@ -6,7 +6,7 @@ import { formatUnits, parseUnits } from "viem";
 import type { Db } from "../db/pool.js";
 import { advanceStep, getGift, transition, type Gift } from "../gifts/ledger.js";
 import { BawError } from "../baw/cli.js";
-import { StillPendingError, type AgenticWalletPort, type ChainPort, type MarketPort, type VaultPort } from "./ports.js";
+import { StillPendingError, type AgenticWalletPort, type ChainPort, type ExecKind, type MarketPort, type VaultPort } from "./ports.js";
 
 export interface ExecConfig {
   liveTrading: boolean;
@@ -70,15 +70,15 @@ export async function checkQuoteDrift(d: ExecDeps, g: Gift): Promise<string | nu
 
 // ---- exec_records helpers for Agentic Wallet steps ----
 
-type AwKind = "swap" | "vault_send" | "sweep";
-interface AwRecord {
+export type AwKind = ExecKind;
+export interface AwRecord {
   ref: string | null;
   status: string;
   amount: string | null;
   started_at: number;
 }
 
-async function getRecord(db: Db, giftId: string, kind: AwKind): Promise<AwRecord | null> {
+export async function getRecord(db: Db, giftId: string, kind: AwKind): Promise<AwRecord | null> {
   const { rows } = await db.query<AwRecord>(
     "SELECT ref, status, amount, (extract(epoch FROM created_at) * 1000)::bigint AS started_at FROM exec_records WHERE gift_id = $1 AND kind = $2",
     [giftId, kind],
@@ -87,12 +87,12 @@ async function getRecord(db: Db, giftId: string, kind: AwKind): Promise<AwRecord
   return r ? { ...r, started_at: Number(r.started_at) } : null;
 }
 
-async function startRecord(db: Db, giftId: string, kind: AwKind, dryRun: boolean): Promise<boolean> {
+export async function startRecord(db: Db, giftId: string, kind: AwKind, dryRun: boolean): Promise<boolean> {
   const r = await db.query("INSERT INTO exec_records (gift_id, kind, status, dry_run) VALUES ($1, $2, 'started', $3) ON CONFLICT DO NOTHING", [giftId, kind, dryRun]);
   return (r.rowCount ?? 0) > 0;
 }
 
-async function updateRecord(db: Db, giftId: string, kind: AwKind, f: { ref?: string; status?: string; amount?: bigint; detail?: unknown }) {
+export async function updateRecord(db: Db, giftId: string, kind: AwKind, f: { ref?: string; status?: string; amount?: bigint; detail?: unknown }) {
   await db.query(
     `UPDATE exec_records SET ref = coalesce($3, ref), status = coalesce($4, status), amount = coalesce($5, amount),
        detail = coalesce($6, detail), updated_at = now() WHERE gift_id = $1 AND kind = $2`,
@@ -114,7 +114,7 @@ async function waitTransfer(d: ExecDeps, txHash: string, token: string, to: stri
 }
 
 /** Sends `amountHuman` of `token` from the Agentic Wallet to the vault, once per (gift, kind). Returns the tx hash. */
-async function awSendOnce(d: ExecDeps, g: Gift, kind: "vault_send" | "sweep", token: string, amountHuman: string): Promise<string> {
+async function awSendOnce(d: ExecDeps, g: Gift, kind: "vault_send" | "sweep" | "proceeds" | "unwind", token: string, amountHuman: string): Promise<string> {
   let rec = await getRecord(d.db, g.id, kind);
   if (!rec) {
     if (!(await startRecord(d.db, g.id, kind, g.dryRun))) rec = await getRecord(d.db, g.id, kind);
@@ -238,4 +238,4 @@ export async function runBuy(d: ExecDeps, giftId: string): Promise<ExecOutcome> 
   }
 }
 
-export { awSendOnce, waitTransfer };
+export { awSendOnce, waitTransfer, driftBps };

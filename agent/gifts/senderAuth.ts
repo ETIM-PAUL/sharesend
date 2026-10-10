@@ -4,13 +4,29 @@ import { createHash } from "node:crypto";
 import type { Queryable } from "../db/pool.js";
 import type { Gift } from "./ledger.js";
 
-export type SenderAction = "cancel" | "link";
-const ACTION_TEXT: Record<SenderAction, string> = { cancel: "Cancel this gift", link: "Get a new claim link" };
+export type SenderAction = "cancel" | "cancel-stock" | "cancel-usdt" | "link" | "return-stock" | "return-usdt";
+// The choice is part of the signed text, so a signature for one choice can't be replayed as the other.
+const ACTION_TEXT: Record<SenderAction, string> = {
+  cancel: "Cancel this gift",
+  "cancel-stock": "Cancel this gift and get the stock back",
+  "cancel-usdt": "Cancel this gift and get USDT back",
+  link: "Get a new claim link",
+  "return-stock": "If this gift is not claimed, return the stock to me",
+  "return-usdt": "If this gift is not claimed, sell it and return USDT to me",
+};
 export const SENDER_MESSAGE_TTL_MS = 5 * 60_000;
 
 /** The exact text the sender's wallet signs (personal_sign). */
 export function senderMessage(action: SenderAction, giftId: string, isoTime: string): string {
   return `ShareSend\n${ACTION_TEXT[action]}\nGift: ${giftId}\nTime: ${isoTime}`;
+}
+
+/** Which of `candidates` a signed message is for, judged by its text (the signature is checked separately). */
+export function actionOf(message: unknown, giftId: string, candidates: SenderAction[]): SenderAction | null {
+  if (typeof message !== "string") return null;
+  const time = /\nTime: (\S+)$/.exec(message)?.[1];
+  if (!time) return null;
+  return candidates.find((a) => message === senderMessage(a, giftId, time)) ?? null;
 }
 
 export type SignatureVerifier = (address: string, message: string, signature: string) => Promise<boolean>;

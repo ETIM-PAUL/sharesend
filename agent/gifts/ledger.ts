@@ -45,7 +45,11 @@ export interface Gift {
   claimCodeIssued: boolean;
   readyAt: Date | null;
   claimedAt: Date | null;
+  /** What the sender wants if the gift goes back to them: the stock itself, or USDT from selling it. */
+  returnAs: ReturnAs;
 }
+
+export type ReturnAs = "stock" | "usdt";
 
 // ---- Errors ----
 
@@ -115,6 +119,7 @@ function toGift(r: any): Gift {
     claimCodeIssued: r.claim_code_issued ?? false,
     readyAt: r.ready_at ?? null,
     claimedAt: r.claimed_at ?? null,
+    returnAs: r.return_as ?? "stock",
   };
 }
 
@@ -136,6 +141,7 @@ export interface NewGift {
   paymentExpiresAt: Date;
   dryRun?: boolean;
   paymentRequirements?: unknown[];
+  returnAs?: ReturnAs;
 }
 
 export interface GiftCaps {
@@ -187,8 +193,8 @@ export async function createGift(db: Db, input: NewGift, caps: GiftCaps): Promis
 
     const { rows } = await c.query(
       `INSERT INTO gifts (id, status, sender_address, sender_name, recipient_name, message, ticker, issuer,
-         token_address, token_decimals, quoted_token_amount, usd_cost, fee_usd, quote_id, claim_code_hash, payment_expires_at, dry_run, payment_requirements)
-       VALUES ($1, 'AWAITING_PAYMENT', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+         token_address, token_decimals, quoted_token_amount, usd_cost, fee_usd, quote_id, claim_code_hash, payment_expires_at, dry_run, payment_requirements, return_as)
+       VALUES ($1, 'AWAITING_PAYMENT', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
        RETURNING *`,
       [
         randomUUID(),
@@ -208,6 +214,7 @@ export async function createGift(db: Db, input: NewGift, caps: GiftCaps): Promis
         input.paymentExpiresAt,
         input.dryRun ?? false,
         input.paymentRequirements ? JSON.stringify(input.paymentRequirements) : null,
+        input.returnAs === "usdt" ? "usdt" : "stock",
       ],
     );
     const gift = toGift(rows[0]);
@@ -223,6 +230,20 @@ export async function getGift(db: Queryable, id: string): Promise<Gift | null> {
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Changes how a gift comes back to the sender. Allowed until the stock has actually left the vault for the
+ * sell-back (an exec_records `to_wallet` row), and never once the gift is claimed, returned or refunded.
+ */
+export async function setReturnAs(db: Queryable, id: string, choice: ReturnAs): Promise<boolean> {
+  const r = await db.query(
+    `UPDATE gifts g SET return_as = $2, updated_at = now()
+     WHERE g.id = $1 AND g.status IN ('AWAITING_PAYMENT', 'PAID', 'BUYING', 'READY', 'RETURNING')
+       AND NOT EXISTS (SELECT 1 FROM exec_records e WHERE e.gift_id = g.id AND e.kind = 'to_wallet')`,
+    [id, choice],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
 
 /** Gifts claimed (or being claimed) to an address, oldest first. */
 export async function giftsClaimedBy(db: Queryable, address: string): Promise<Gift[]> {

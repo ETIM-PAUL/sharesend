@@ -5,6 +5,7 @@ import { completeClaim, getGift, recordTx, releaseClaim, transition, type Gift }
 import { BawError } from "../baw/cli.js";
 import { SimulationFailedError, StillPendingError } from "./ports.js";
 import { awSendOnce, usdRaw, waitTransfer, type ExecDeps, type ExecOutcome } from "./buy.js";
+import { returnAsUsdt } from "./cashout.js";
 
 async function load(d: ExecDeps, id: string): Promise<Gift> {
   const g = await getGift(d.db, id);
@@ -31,14 +32,17 @@ export async function payoutClaim(d: ExecDeps, id: string): Promise<ExecOutcome>
   }
 }
 
-/** Returns an unclaimed gift's stock to the sender (sender cancelled, or the claim window ended). */
+/** Returns an unclaimed gift to the sender: as stock, or (the sender's choice) sold into USDT. */
 export async function returnGift(d: ExecDeps, id: string): Promise<ExecOutcome> {
   let g = await load(d, id);
   if (g.status === "READY") g = await transition(d.db, g.id, "READY", "RETURNING");
   if (g.status !== "RETURNING") return { status: "NOOP", gift: g };
   try {
-    const r = await d.vault.transfer({ giftId: g.id, kind: "return", token: g.tokenAddress, to: g.senderAddress, amount: g.tokenAmount! });
-    return { status: "RETURNED", gift: await transition(d.db, g.id, "RETURNING", "RETURNED", { returnTx: r.txHash }) };
+    const returnStock = async (): Promise<ExecOutcome> => {
+      const r = await d.vault.transfer({ giftId: g.id, kind: "return", token: g.tokenAddress, to: g.senderAddress, amount: g.tokenAmount! });
+      return { status: "RETURNED", gift: await transition(d.db, g.id, "RETURNING", "RETURNED", { returnTx: r.txHash }) };
+    };
+    return g.returnAs === "usdt" ? await returnAsUsdt(d, g, returnStock) : await returnStock();
   } catch (e) {
     if (e instanceof StillPendingError) return { status: "PENDING", reason: e.message };
     throw e; // stays RETURNING; retried by the expiry job

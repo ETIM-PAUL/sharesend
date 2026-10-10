@@ -118,9 +118,10 @@ export async function getOrder(orderId: string): Promise<MarketOrder | null> {
   return d.list[0] ?? null;
 }
 
-export async function listOrders(f: { toToken?: string; startTime?: number; pageSize?: number }): Promise<MarketOrder[]> {
+export async function listOrders(f: { toToken?: string; fromToken?: string; startTime?: number; pageSize?: number }): Promise<MarketOrder[]> {
   const args = ["market-order", "list", "--binanceChainId", "56", "--pageSize", String(f.pageSize ?? 20)];
   if (f.toToken) args.push("--toToken", f.toToken);
+  if (f.fromToken) args.push("--fromToken", f.fromToken);
   if (f.startTime) args.push("--startTime", String(f.startTime));
   return (await runBaw<{ list: MarketOrder[] }>(args)).list;
 }

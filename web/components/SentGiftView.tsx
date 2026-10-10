@@ -6,13 +6,14 @@ import Link from "next/link";
 import { usePrivy, useWallets } from "@privy-io/react-auth";
 import { createWalletClient, custom } from "viem";
 import { bsc } from "viem/chains";
-import { agent, senderMessage, type PublicGift } from "@/lib/agent";
+import { agent, senderMessage, type PublicGift, type SenderActionName } from "@/lib/agent";
 import { shortAddr, usd } from "@/lib/format";
 import { getSent, type SentGift } from "@/lib/sent";
 import { useHydrated } from "@/lib/useHydrated";
 import { GiftProgress, useGift } from "./GiftProgress";
 import { ShareCard } from "./ShareCard";
 import { Button, Notice } from "./ui";
+import { ReturnChoice, type ReturnAs } from "./ReturnChoice";
 
 const CANCELLABLE = new Set(["AWAITING_PAYMENT", "PAID", "READY"]);
 const RELINKABLE = new Set(["PAID", "BUYING", "READY"]);
@@ -56,12 +57,13 @@ function SenderActions({ gift, local, onChange }: { gift: PublicGift; local?: Se
 
   const canCancel = CANCELLABLE.has(gift.status);
   const canRelink = RELINKABLE.has(gift.status);
+  const canChooseReturn = RELINKABLE.has(gift.status); // PAID, BUYING or READY
   if (!canCancel && !canRelink) return null;
 
   // Only the wallet that paid can act on the gift.
   const senderWallet = local ? wallets.find((w) => w.address.toLowerCase() === local.senderAddress.toLowerCase()) : undefined;
 
-  async function sign(action: "cancel" | "link") {
+  async function sign(action: SenderActionName) {
     if (!senderWallet) throw new Error(local ? `Sign in with ${shortAddr(local.senderAddress)}, the wallet that paid for this gift.` : "Open this page on the device you sent the gift from.");
     await senderWallet.switchChain(56);
     const client = createWalletClient({ chain: bsc, transport: custom(await senderWallet.getEthereumProvider()) });
@@ -70,13 +72,14 @@ function SenderActions({ gift, local, onChange }: { gift: PublicGift; local?: Se
     return agent.senderAction(gift.id, action, message, signature);
   }
 
-  async function run(action: "cancel" | "link") {
+  async function run(action: SenderActionName) {
     setError(null);
-    setBusy(action === "cancel" ? "Confirm in your wallet to cancel…" : "Confirm in your wallet to get a new link…");
+    setBusy(action.startsWith("cancel") ? "Confirm in your wallet to cancel…" : action === "link" ? "Confirm in your wallet to get a new link…" : "Confirm in your wallet to save your choice…");
     try {
       const r = await sign(action);
       if (action === "link" && r.claimUrl) setLink(r.claimUrl);
-      if (action === "cancel" && r.gift) onChange(r.gift);
+      if (action.startsWith("cancel") && r.gift) onChange({ ...r.gift, returnedUsdt: null });
+      if (action.startsWith("return") && r.returnAs) onChange({ ...gift, returnAs: r.returnAs });
       setConfirmCancel(false);
     } catch (e) {
       const m = (e as Error).message;
@@ -89,7 +92,10 @@ function SenderActions({ gift, local, onChange }: { gift: PublicGift; local?: Se
   if (ready && !authenticated)
     return (
       <div className="space-y-3 border-t border-rule pt-5">
-        <p className="text-sm text-ink-soft">Sign in with the wallet that paid to get a new claim link or cancel this gift.</p>
+        {canChooseReturn ? (
+          <p className="text-sm text-ink">If it isn&apos;t claimed, it comes back to you {gift.returnAs === "usdt" ? "as USDT (we sell the stock)" : "as the stock"}.</p>
+        ) : null}
+        <p className="text-sm text-ink-soft">Sign in with the wallet that paid to change that, get a new claim link or cancel this gift.</p>
         <Button variant="quiet" onClick={login}>
           Sign in
         </Button>
@@ -109,18 +115,41 @@ function SenderActions({ gift, local, onChange }: { gift: PublicGift; local?: Se
         </>
       ) : null}
 
+      {canChooseReturn ? (
+        <div className="space-y-2">
+          <ReturnChoice
+            legend="If it isn't claimed in time, I want back"
+            value={gift.returnAs}
+            disabled={!!busy}
+            onChange={(v: ReturnAs) => v !== gift.returnAs && run(v === "usdt" ? "return-usdt" : "return-stock")}
+          />
+          <p className="text-xs text-ink-soft">Changing this asks your wallet to sign once. It takes effect right away.</p>
+        </div>
+      ) : null}
+
       {canCancel ? (
         confirmCancel ? (
           <Notice>
             {gift.status === "READY"
-              ? "The stock comes back to the wallet you paid from. The claim link stops working."
+              ? "The claim link stops working, and the gift goes back to you. Pick what you want back:"
               : gift.status === "PAID"
                 ? "You get your payment back in full. The claim link stops working."
                 : "This gift hasn't been paid, so nothing is charged."}
-            <div className="mt-3 flex gap-2">
-              <button className="rounded-full bg-error-ink px-4 py-2 text-sm font-semibold text-sheet" onClick={() => run("cancel")} disabled={!!busy}>
-                Cancel the gift
-              </button>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {gift.status === "READY" ? (
+                <>
+                  <button className="rounded-full bg-error-ink px-4 py-2 text-sm font-semibold text-sheet" onClick={() => run("cancel-stock")} disabled={!!busy}>
+                    Cancel, get the stock back
+                  </button>
+                  <button className="rounded-full bg-error-ink px-4 py-2 text-sm font-semibold text-sheet" onClick={() => run("cancel-usdt")} disabled={!!busy}>
+                    Cancel, get USDT back
+                  </button>
+                </>
+              ) : (
+                <button className="rounded-full bg-error-ink px-4 py-2 text-sm font-semibold text-sheet" onClick={() => run("cancel")} disabled={!!busy}>
+                  Cancel the gift
+                </button>
+              )}
               <button className="rounded-full border border-rule px-4 py-2 text-sm" onClick={() => setConfirmCancel(false)}>
                 Keep it
               </button>
