@@ -150,3 +150,62 @@ export const agent = {
 export function senderMessage(action: "cancel" | "link", giftId: string, isoTime: string): string {
   return `ShareSend\n${action === "cancel" ? "Cancel this gift" : "Get a new claim link"}\nGift: ${giftId}\nTime: ${isoTime}`;
 }
+
+// ---- Recipient side ----
+
+export interface StockCard {
+  companyName: string;
+  tokenSymbol: string;
+  tokenAddress: string;
+  issuerLabel: string;
+  issuerWebsite: string | null;
+  attestationUrl: string | null;
+  pricePerShare: number;
+  marketOpen: boolean;
+  profile: { description: string | null; website: string | null; industry: string | null; ceo: string | null };
+}
+
+export interface ClaimViewData {
+  gift: {
+    id: string;
+    status: GiftStatus;
+    senderName: string;
+    recipientName: string;
+    message: string;
+    ticker: string;
+    usdSent: number;
+    shares: number | null;
+    valueNowUsd: number | null;
+    sentAt: string;
+    claimExpiresAt: string | null;
+    claimTx: string | null;
+    dryRun: boolean;
+  };
+  stock: StockCard | null;
+  series: { t: number; usd: number }[];
+}
+
+export interface Holding {
+  ticker: string;
+  tokenAddress: string;
+  stock: StockCard | null;
+  shares: number | null;
+  valueNowUsd: number | null;
+  receivedUsd: number;
+  giftsReceived: number;
+  claimPending: boolean;
+  dryRun: boolean;
+  series: { t: number; usd: number }[];
+}
+
+export const claimApi = {
+  view: (id: string, code: string) =>
+    call<ClaimViewData>(`/claims/${id}/view`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code }) }),
+  claim: (id: string, code: string, address: string) =>
+    call<{ ok: true; status: GiftStatus }>(`/claims/${id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code, address, confirmEligible: true }),
+    }),
+  holdings: (address: string) => call<{ holdings: Holding[]; balancesAvailable: boolean }>(`/holdings/${address}`),
+};

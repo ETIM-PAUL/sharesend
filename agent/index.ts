@@ -5,6 +5,7 @@ import { request } from "./binance/client.js";
 import { BinanceError } from "./binance/errors.js";
 import { fetchTickerOptions, quoteGift } from "./pricing/quote.js";
 import { gifts } from "./routes/gifts.js";
+import { claims } from "./routes/claims.js";
 import { getDb } from "./db/pool.js";
 import { migrate } from "./db/migrate.js";
 
@@ -82,6 +83,7 @@ app.get("/egress-ip", async (c) => {
 });
 
 app.route("/", gifts);
+app.route("/", claims);
 
 // Apply pending migrations on boot when a database is configured.
 if (process.env.DATABASE_URL)

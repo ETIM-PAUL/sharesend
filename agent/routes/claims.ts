@@ -1,0 +1,150 @@
+// Recipient routes. The claim code comes from the link's #fragment and is sent in the request body only;
+// it is never logged and never appears in a URL the server sees.
+//   POST /claims/:id/view   {code}                              → the gift card, stock profile and value
+//   POST /claims/:id        {code, address, confirmEligible}    → READY → CLAIMING, payout runs in the background
+//   GET  /holdings/:address                                      → stock received through ShareSend, with value now
+import { Hono, type Context } from "hono";
+import { isAddress } from "viem";
+import { getDb } from "../db/pool.js";
+import { beginClaim, giftsClaimedBy, verifyClaimCode, type ClaimFailure, type Gift } from "../gifts/ledger.js";
+import { advanceInBackground } from "../execution/advance.js";
+import { sharesOf, stockInfo, valueSeries, type StockInfo } from "../claims/stock.js";
+import { rawBalances } from "../binance/wallet.js";
+
+export const claims = new Hono();
+
+const clientIp = (c: Context) => c.req.header("x-forwarded-for")?.split(",")[0]?.trim() || c.req.header("x-real-ip") || "unknown";
+
+function db503() {
+  try {
+    return getDb();
+  } catch {
+    return null;
+  }
+}
+
+const CLAIM_ERRORS: Record<ClaimFailure, { status: 400 | 404 | 409 | 410 | 429; message: string }> = {
+  RATE_LIMITED: { status: 429, message: "Too many tries. Wait 15 minutes, then open the link again." },
+  INVALID: { status: 404, message: "This link doesn't work. Ask the person who sent it for a new one." },
+  BAD_ADDRESS: { status: 400, message: "That isn't a BNB Chain wallet address the gift can go to. Check it and try again." },
+  NOT_READY: { status: 409, message: "Your stock is still being bought. Try again in a few minutes." },
+  IN_PROGRESS: { status: 409, message: "This gift is being claimed right now." },
+  ALREADY_CLAIMED: { status: 409, message: "This gift has already been claimed." },
+  EXPIRED: { status: 410, message: "This gift wasn't claimed in time and has gone back to the sender." },
+  RETURNED: { status: 410, message: "The sender cancelled this gift." },
+  REFUNDED: { status: 410, message: "This gift was refunded to the sender." },
+};
+
+/** Shares a gift represents: what reached the vault, or the quoted amount before the buy. */
+function giftShares(g: Gift, info: StockInfo | null): number | null {
+  if (!info) return null;
+  return sharesOf(g.tokenAmount ?? g.quotedTokenAmount, info.decimals, info.ratio);
+}
+
+function stockCard(info: StockInfo | null) {
+  if (!info) return null;
+  return {
+    companyName: info.companyName,
+    tokenSymbol: info.tokenSymbol,
+    tokenAddress: info.tokenAddress,
+    issuerLabel: info.issuerLabel,
+    issuerWebsite: info.issuerWebsite,
+    attestationUrl: info.attestationUrl,
+    pricePerShare: info.referencePrice,
+    marketOpen: info.marketOpen,
+    profile: info.profile,
+  };
+}
+
+claims.post("/claims/:id/view", async (c) => {
+  const db = db503();
+  if (!db) return c.json({ ok: false, error: "database not configured" }, 503);
+  const body = (await c.req.json().catch(() => null)) as { code?: unknown } | null;
+  const checked = await verifyClaimCode(db, c.req.param("id"), typeof body?.code === "string" ? body.code : "", clientIp(c));
+  if (!checked.ok) {
+    const e = CLAIM_ERRORS[checked.reason];
+    return c.json({ ok: false, reason: checked.reason, error: e.message }, e.status);
+  }
+  const g = checked.gift;
+  const info = await stockInfo(g.tokenAddress).catch(() => null);
+  const shares = giftShares(g, info);
+  const series = info && shares ? await valueSeries(info, shares, (g.readyAt ?? g.createdAt).getTime()).catch(() => []) : [];
+  return c.json({
+    ok: true,
+    gift: {
+      id: g.id,
+      status: g.status,
+      senderName: g.senderName,
+      recipientName: g.recipientName,
+      message: g.message,
+      ticker: g.ticker,
+      usdSent: g.usdCost,
+      shares,
+      valueNowUsd: info && shares ? Math.round(shares * info.referencePrice * 100) / 100 : null,
+      sentAt: g.createdAt,
+      claimExpiresAt: g.claimExpiresAt,
+      claimTx: g.claimTx && /^0x[0-9a-fA-F]{64}$/.test(g.claimTx) ? g.claimTx : null,
+      dryRun: g.dryRun,
+    },
+    stock: stockCard(info),
+    series,
+  });
+});
+
+claims.post("/claims/:id", async (c) => {
+  const db = db503();
+  if (!db) return c.json({ ok: false, error: "database not configured" }, 503);
+  const body = (await c.req.json().catch(() => null)) as { code?: unknown; address?: unknown; confirmEligible?: unknown } | null;
+  if (body?.confirmEligible !== true) return c.json({ ok: false, error: "Confirm you're allowed to hold this stock where you live." }, 400);
+  if (typeof body.address !== "string" || !isAddress(body.address)) return c.json({ ok: false, reason: "BAD_ADDRESS", error: CLAIM_ERRORS.BAD_ADDRESS.message }, 400);
+  const id = c.req.param("id");
+  const r = await beginClaim(db, {
+    giftId: id,
+    code: typeof body.code === "string" ? body.code : "",
+    claimAddress: body.address,
+    ip: clientIp(c),
+    // The gift can't be "claimed" back into ShareSend's own wallets.
+    forbiddenAddresses: [process.env.VAULT_ADDRESS, process.env.AGENTIC_WALLET_ADDRESS].filter((a): a is string => !!a),
+  });
+  if (!r.ok) {
+    const e = CLAIM_ERRORS[r.reason];
+    return c.json({ ok: false, reason: r.reason, error: e.message }, e.status);
+  }
+  // The vault transfer needs no Binance session, so claims work even while the Agentic Wallet is signed out.
+  advanceInBackground(db, r.gift.id);
+  return c.json({ ok: true, status: r.gift.status }, 202);
+});
+
+claims.get("/holdings/:address", async (c) => {
+  const db = db503();
+  if (!db) return c.json({ ok: false, error: "database not configured" }, 503);
+  const address = c.req.param("address");
+  if (!isAddress(address)) return c.json({ ok: false, error: "not an address" }, 400);
+
+  const received = await giftsClaimedBy(db, address);
+  const tokens = [...new Set(received.map((g) => g.tokenAddress.toLowerCase()))];
+  const balances = await rawBalances(address, tokens).catch(() => null);
+
+  const holdings = await Promise.all(
+    tokens.map(async (token) => {
+      const gifts = received.filter((g) => g.tokenAddress.toLowerCase() === token);
+      const info = await stockInfo(token).catch(() => null);
+      const raw = balances?.get(token) ?? null;
+      const shares = info && raw !== null ? sharesOf(raw, info.decimals, info.ratio) : null;
+      const since = Math.min(...gifts.map((g) => (g.claimedAt ?? g.updatedAt).getTime()));
+      return {
+        ticker: gifts[0]!.ticker,
+        tokenAddress: info?.tokenAddress ?? token,
+        stock: stockCard(info),
+        shares,
+        valueNowUsd: info && shares !== null ? Math.round(shares * info.referencePrice * 100) / 100 : null,
+        receivedUsd: gifts.reduce((s, g) => s + g.usdCost, 0),
+        giftsReceived: gifts.length,
+        claimPending: gifts.some((g) => g.status === "CLAIMING"),
+        dryRun: gifts.every((g) => g.dryRun),
+        series: info && shares ? await valueSeries(info, shares, since).catch(() => []) : [],
+      };
+    }),
+  );
+  return c.json({ ok: true, address, balancesAvailable: balances !== null, holdings });
+});

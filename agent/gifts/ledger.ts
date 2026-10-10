@@ -43,6 +43,8 @@ export interface Gift {
   /** The x402 requirements offered in the 402 response (JSON). */
   paymentRequirements: unknown[] | null;
   claimCodeIssued: boolean;
+  readyAt: Date | null;
+  claimedAt: Date | null;
 }
 
 // ---- Errors ----
@@ -111,6 +113,8 @@ function toGift(r: any): Gift {
     dryRun: r.dry_run,
     paymentRequirements: r.payment_requirements ?? null,
     claimCodeIssued: r.claim_code_issued ?? false,
+    readyAt: r.ready_at ?? null,
+    claimedAt: r.claimed_at ?? null,
   };
 }
 
@@ -219,6 +223,15 @@ export async function getGift(db: Queryable, id: string): Promise<Gift | null> {
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Gifts claimed (or being claimed) to an address, oldest first. */
+export async function giftsClaimedBy(db: Queryable, address: string): Promise<Gift[]> {
+  const { rows } = await db.query(
+    "SELECT * FROM gifts WHERE lower(claim_address) = lower($1) AND status IN ('CLAIMING', 'CLAIMED') ORDER BY coalesce(claimed_at, updated_at)",
+    [address],
+  );
+  return rows.map(toGift);
+}
 
 // ---- Transitions ----
 
@@ -411,17 +424,33 @@ function whyNotClaimable(g: Gift, now: Date): ClaimFailure {
  * Validates a claim and moves the gift READY → CLAIMING for this address. Exactly one of any number of
  * concurrent claims wins. The vault transfer (Phase 6) then finishes it with completeClaim or releaseClaim.
  */
-export async function beginClaim(db: Db, req: ClaimRequest, limits: ClaimRateLimits = DEFAULT_CLAIM_LIMITS): Promise<ClaimResult> {
-  const ipHash = hashIp(req.ip);
-  const giftId = UUID_RE.test(req.giftId) ? req.giftId.toLowerCase() : null;
-
-  if (await isRateLimited(db, ipHash, giftId, limits)) return { ok: false, reason: "RATE_LIMITED" };
-
-  const gift = giftId && isWellFormedCode(req.code) ? await getGift(db, giftId) : null;
-  if (!gift || !codeMatches(req.code, gift.claimCodeHash)) {
-    await recordAttempt(db, ipHash, giftId, false);
+/**
+ * Checks a claim code under the claim rate limits (failed attempts count, per IP and per gift). Used to view a
+ * gift as well as to claim it, so the card itself can't be brute-forced either.
+ */
+export async function verifyClaimCode(
+  db: Queryable,
+  giftId: string,
+  code: string,
+  ip: string,
+  limits: ClaimRateLimits = DEFAULT_CLAIM_LIMITS,
+): Promise<{ ok: true; gift: Gift } | { ok: false; reason: "RATE_LIMITED" | "INVALID" }> {
+  const ipHash = hashIp(ip);
+  const id = UUID_RE.test(giftId) ? giftId.toLowerCase() : null;
+  if (await isRateLimited(db, ipHash, id, limits)) return { ok: false, reason: "RATE_LIMITED" };
+  const gift = id && typeof code === "string" && isWellFormedCode(code) ? await getGift(db, id) : null;
+  if (!gift || !codeMatches(code, gift.claimCodeHash)) {
+    await recordAttempt(db, ipHash, id, false);
     return { ok: false, reason: "INVALID" };
   }
+  return { ok: true, gift };
+}
+
+export async function beginClaim(db: Db, req: ClaimRequest, limits: ClaimRateLimits = DEFAULT_CLAIM_LIMITS): Promise<ClaimResult> {
+  const ipHash = hashIp(req.ip);
+  const checked = await verifyClaimCode(db, req.giftId, req.code, req.ip, limits);
+  if (!checked.ok) return { ok: false, reason: checked.reason };
+  const gift = checked.gift;
 
   if (!isAddress(req.claimAddress) || req.claimAddress.toLowerCase() === zeroAddress) return { ok: false, reason: "BAD_ADDRESS" };
   const to = getAddress(req.claimAddress);

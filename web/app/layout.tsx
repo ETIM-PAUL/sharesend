@@ -29,9 +29,14 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
               <Link href="/" className="numerals text-xl font-bold tracking-tight text-ink">
                 ShareSend
               </Link>
-              <Link href="/sent" className="text-sm text-ink-soft underline-offset-4 hover:underline">
-                Gifts you sent
-              </Link>
+              <nav className="flex gap-4 text-sm text-ink-soft">
+                <Link href="/you" className="underline-offset-4 hover:underline">
+                  Your stock
+                </Link>
+                <Link href="/sent" className="underline-offset-4 hover:underline">
+                  Sent
+                </Link>
+              </nav>
             </header>
             <main className="flex-1">{children}</main>
           </div>
