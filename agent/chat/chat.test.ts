@@ -136,3 +136,12 @@ describe("helpers", () => {
     expect(systemPrompt(NOW, "Africa/Lagos", 20)).toContain("Saturday, October 10, 2026");
   });
 });
+
+describe("describeLlmError", () => {
+  it("reads an Anthropic API error without leaking anything but status, type and message", async () => {
+    const { describeLlmError } = await import("./error.js");
+    const e = Object.assign(new Error("401 {...}"), { status: 401, error: { error: { type: "authentication_error", message: "invalid x-api-key" } } });
+    expect(describeLlmError(e)).toBe("HTTP 401: authentication_error: invalid x-api-key");
+    expect(describeLlmError(new Error("network down"))).toBe("Error: network down");
+  });
+});

@@ -83,7 +83,7 @@ Each gift has a `return_as` setting, chosen by the sender:
 
 ## Chat and conditional orders
 
-**Tell the agent** (on `/send`) turns plain English into a draft gift for the form: "Send Ada $5 of Nvidia, but only if it drops 0.5% by tomorrow 2PM". The model has a single tool, `propose_gift`, that only returns a draft. Code validates every field (the stock must exist, $1 to `MAX_GIFT_USD`, a deadline with a time zone, 10 minutes to 7 days ahead, a drop of 0–50%) and the sender still checks the form, signs in and pays. It can't buy, send or sign anything. Chat is switched off (and hidden) unless `ANTHROPIC_API_KEY` is set; `CHAT_MODEL` (default `claude-haiku-4-5-20251001`) and `CHAT_DAILY_LIMIT` (default 400 a day, 8 a minute per IP) cap the cost. Message text is never logged.
+**Tell the agent** (on `/send`) turns plain English into a draft gift for the form: "Send Ada $5 of Nvidia, but only if it drops 0.5% by tomorrow 2PM". The model has a single tool, `propose_gift`, that only returns a draft. Code validates every field (the stock must exist, $1 to `MAX_GIFT_USD`, a deadline with a time zone, 10 minutes to 7 days ahead, a drop of 0–50%) and the sender still checks the form, signs in and pays. It can't buy, send or sign anything. Chat is switched off (and hidden) unless a model key is set: `OPENAI_API_KEY` (OpenAI Responses API, default model `gpt-6-luna`) or `ANTHROPIC_API_KEY` (default `claude-haiku-4-5-20251001`). With both set, OpenAI is used unless `CHAT_PROVIDER=anthropic`. `CHAT_MODEL` overrides the model, and `CHAT_DAILY_LIMIT` (default 400 a day; 8 a minute per IP) caps the cost. Message text is never logged.
 
 **A conditional order** is a paid gift that waits in `PAID`:
 - The sender pays up front, so the money is already in the vault.
@@ -92,3 +92,5 @@ Each gift has a `return_as` setting, chosen by the sender:
 - Once triggered, a signed-out trading wallet only delays the buy; the deadline no longer applies.
 - Waiting and refunding don't need the trading wallet, so deadlines hold while it's signed out.
 - The sender can cancel any time before it buys; that is the existing paid-gift cancel, which refunds in full.
+
+If chat shows "The assistant couldn't answer just now", run `npm run cli -- admin chat-test <SERVER_URL>`. It makes one tiny model call and prints the exact error (for example `HTTP 401` for a rejected key, or a billing message when the account has no credit). The server also logs the same line as `chat failed: …`.

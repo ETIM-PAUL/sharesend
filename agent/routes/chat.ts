@@ -4,8 +4,10 @@
 import { Hono, type Context } from "hono";
 import { config } from "../config.js";
 import { searchTickers, tokensForTicker, displayName } from "../binance/rwa.js";
-import { anthropicLlm } from "../chat/anthropic.js";
-import { chatTurn, cleanHistory, type ChatDeps, type Llm } from "../chat/chat.js";
+import { describeLlmError } from "../chat/error.js";
+import { selectChatBackend, type ChatBackend } from "../chat/provider.js";
+import { authorized } from "./adminAuth.js";
+import { chatTurn, cleanHistory, PROPOSE_GIFT_TOOL, type ChatDeps, type Llm } from "../chat/chat.js";
 
 const PER_IP_PER_MINUTE = 8;
 const PER_DAY = Number(process.env.CHAT_DAILY_LIMIT ?? 400);
@@ -39,7 +41,8 @@ export const resolvers: Pick<ChatDeps, "resolveTicker" | "suggest"> = {
   },
 };
 
-export function chatRoutes(llm: Llm | null = anthropicLlm()) {
+export function chatRoutes(backend: ChatBackend | null = selectChatBackend()) {
+  const llm: Llm | null = backend?.llm ?? null;
   const app = new Hono();
 
   app.get("/chat/status", (c) => c.json({ enabled: !!llm }));
@@ -58,8 +61,20 @@ export function chatRoutes(llm: Llm | null = anthropicLlm()) {
       return c.json({ ok: true, ...r });
     } catch (e) {
       // Message content is never logged.
-      console.error(`chat failed: ${(e as Error).message.slice(0, 200)}`);
+      console.error(`chat failed: ${describeLlmError(e)}`);
       return c.json({ ok: false, error: "The assistant couldn't answer just now. You can use the form below." }, 502);
+    }
+  });
+
+  // Operator check: makes one tiny model call and says exactly what went wrong (Bearer ADMIN_TOKEN).
+  app.post("/admin/chat/test", async (c) => {
+    if (!authorized(c)) return c.json({ ok: false, error: "not found" }, 404);
+    if (!backend) return c.json({ ok: false, error: "No model key is set on this server. Set OPENAI_API_KEY (or ANTHROPIC_API_KEY)." });
+    try {
+      const r = await backend.llm.complete({ system: "Reply with the single word OK.", messages: [{ role: "user", content: "ping" }], tool: PROPOSE_GIFT_TOOL });
+      return c.json({ ok: true, provider: backend.provider, model: backend.model, reply: r.text.slice(0, 40) });
+    } catch (e) {
+      return c.json({ ok: false, provider: backend.provider, model: backend.model, error: describeLlmError(e) });
     }
   });
 

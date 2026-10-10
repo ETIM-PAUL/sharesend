@@ -3,8 +3,8 @@
 //   POST /admin/baw/signin           start an Agentic Wallet sign-in on this host (Bearer ADMIN_TOKEN)
 //   GET  /admin/baw/signin           progress of that sign-in (Bearer ADMIN_TOKEN)
 //   POST /admin/jobs/:name/run       run one job now (Bearer ADMIN_TOKEN)
-import { timingSafeEqual } from "node:crypto";
-import { Hono, type Context } from "hono";
+import { Hono } from "hono";
+import { authorized } from "./adminAuth.js";
 import { config } from "../config.js";
 import { getDb } from "../db/pool.js";
 import { economics } from "../payments/economics.js";
@@ -90,15 +90,6 @@ agentRoutes.get("/agent/status", async (c) => {
 });
 
 // ---- Admin ----
-
-function authorized(c: Context): boolean {
-  const token = process.env.ADMIN_TOKEN;
-  if (!token || token.length < 24) return false;
-  const given = (c.req.header("authorization") ?? "").replace(/^Bearer\s+/i, "");
-  const a = Buffer.from(given);
-  const b = Buffer.from(token);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
 
 const signinState: { startedAt: number | null; status: "idle" | "waiting" | "connected" | "failed"; message: string | null } = {
   startedAt: null,

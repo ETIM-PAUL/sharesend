@@ -4,10 +4,11 @@
 //   npm run cli -- admin run-job <SERVER_URL> <job>     run one job now (expire-unpaid, expiry-returns, resume-payouts,
 //                                                       buy-queue, reconcile, keepalive)
 //   npm run cli -- admin status <SERVER_URL>            jobs, session and proof of holdings
+//   npm run cli -- admin chat-test <SERVER_URL>         one tiny model call; prints the exact error if chat is failing
 export async function adminCommand(args: string[]): Promise<void> {
   const [sub, server, name] = args;
   const token = process.env.ADMIN_TOKEN;
-  if (!server) throw new Error("usage: npm run cli -- admin signin|run-job|status <SERVER_URL> [job]");
+  if (!server) throw new Error("usage: npm run cli -- admin signin|run-job|status|chat-test <SERVER_URL> [job]");
   const base = server.replace(/\/$/, "");
   const auth = { authorization: `Bearer ${token}` };
 
@@ -21,6 +22,13 @@ export async function adminCommand(args: string[]): Promise<void> {
     return;
   }
   if (!token) throw new Error("ADMIN_TOKEN is not set in .env");
+
+  if (sub === "chat-test") {
+    const r = await fetch(`${base}/admin/chat/test`, { method: "POST", headers: auth });
+    const b = (await r.json()) as { ok: boolean; provider?: string; model?: string; reply?: string; error?: string };
+    console.log(b.ok ? `Chat works. ${b.provider} ${b.model} answered: ${b.reply}` : `Chat is failing${b.model ? ` (${b.provider} ${b.model})` : ""}: ${b.error}`);
+    return;
+  }
 
   if (sub === "run-job") {
     if (!name) throw new Error("usage: npm run cli -- admin run-job <SERVER_URL> <job>");
@@ -45,5 +53,5 @@ export async function adminCommand(args: string[]): Promise<void> {
     }
     throw new Error("Timed out waiting for confirmation; run the command again for a fresh code.");
   }
-  throw new Error("usage: npm run cli -- admin signin|run-job|status <SERVER_URL> [job]");
+  throw new Error("usage: npm run cli -- admin signin|run-job|status|chat-test <SERVER_URL> [job]");
 }
