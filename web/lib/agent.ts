@@ -211,6 +211,9 @@ export interface Holding {
   tokenAddress: string;
   stock: StockCard | null;
   shares: number | null;
+  /** Exact balance in the token's smallest units (for sending it on), and the token's decimals. */
+  rawBalance: string | null;
+  decimals: number;
   valueNowUsd: number | null;
   priceSource: "market" | "reference";
   receivedUsd: number;
@@ -280,4 +283,18 @@ export const chatApi = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ messages, tz }),
     }),
+};
+
+export interface WalletBalances {
+  address: string;
+  bnb: { raw: string; amount: string; usd: number | null };
+  bnbUsd: number | null;
+  tokens: { symbol: string; name: string; address: string; decimals: number; raw: string; amount: string; usd: number }[];
+  /** Below this much BNB a transfer can't pay its network fee. */
+  minGasWei: string;
+  checkedAt: number;
+}
+
+export const walletApi = {
+  balances: (address: string) => call<WalletBalances>(`/wallet/${address}`),
 };

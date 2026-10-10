@@ -10,6 +10,7 @@ import { beginClaim, giftsClaimedBy, verifyClaimCode, type ClaimFailure, type Gi
 import { advanceInBackground } from "../execution/advance.js";
 import { sharesOf, stockInfo, valuation, type StockInfo } from "../claims/stock.js";
 import { rawBalances } from "../binance/wallet.js";
+import { walletBalances } from "../wallet/balances.js";
 
 export const claims = new Hono();
 
@@ -151,6 +152,9 @@ claims.get("/holdings/:address", async (c) => {
         tokenAddress: info?.tokenAddress ?? token,
         stock: stockCard(info),
         shares,
+        // Exact balance in the token's smallest units, for sending it onward.
+        rawBalance: raw === null ? null : raw.toString(),
+        decimals: info?.decimals ?? 18,
         valueNowUsd: v?.valueNowUsd ?? (info && shares !== null ? Math.round(shares * info.referencePrice * 100) / 100 : null),
         priceSource: v?.priceSource ?? "reference",
         receivedUsd: gifts.reduce((s, g) => s + g.usdCost, 0),
@@ -162,4 +166,16 @@ claims.get("/holdings/:address", async (c) => {
     }),
   );
   return c.json({ ok: true, address, balancesAvailable: balances !== null, holdings });
+});
+
+// Balances for the wallet page: BNB (fees) and the stablecoins, with USD values. Public chain data; stock holdings are /holdings.
+claims.get("/wallet/:address", async (c) => {
+  const address = c.req.param("address");
+  if (!isAddress(address)) return c.json({ ok: false, error: "not an address" }, 400);
+  try {
+    return c.json({ ok: true, ...(await walletBalances(address)) });
+  } catch (e) {
+    console.error(`wallet balances failed: ${(e as Error).message.slice(0, 160)}`);
+    return c.json({ ok: false, error: "Couldn't read this wallet right now. Try again in a moment." }, 502);
+  }
 });

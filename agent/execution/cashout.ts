@@ -101,11 +101,27 @@ export async function returnAsUsdt(d: ExecDeps, g: Gift, returnStock: () => Prom
 
       // Poll to a terminal state: an orderId is not a completed sale.
       const deadline = now() + d.cfg.waitMs;
-      let order = await d.wallet.getOrder(orderId!);
+      // The id the CLI returned can differ from the one `market-order list` knows (seen live on buys). When the saved
+      // id isn't found, adopt the matching sell by token and time instead of polling a ghost forever.
+      const sinceMs = (sell?.started_at ?? now()) - 10_000;
+      const { id: giftId, tokenAddress } = g;
+      const lookup = async () => {
+        let o = await d.wallet.getOrder(orderId!);
+        if (!o) {
+          const adopted = await d.wallet.findSellSince(tokenAddress, sinceMs);
+          if (adopted && adopted !== orderId) {
+            orderId = adopted;
+            await updateRecord(d.db, giftId, "sell", { ref: orderId, status: "submitted" });
+            o = await d.wallet.getOrder(orderId);
+          }
+        }
+        return o;
+      };
+      let order = await lookup();
       while (!order || order.status === "PENDING") {
         if (now() >= deadline) return { status: "PENDING", reason: `sell order ${orderId} still processing` };
         await sleep(d.cfg.pollMs);
-        order = await d.wallet.getOrder(orderId!);
+        order = await lookup();
       }
       if (order.status === "FAILED" || !order.txHash) {
         await updateRecord(d.db, g.id, "sell", { status: "failed" });

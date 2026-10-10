@@ -14,6 +14,9 @@ export function AppShell({ children, wide = false }: { children: React.ReactNode
           <Link href="/you" className="underline-offset-4 hover:text-ink hover:underline">
             Your stock
           </Link>
+          <Link href="/wallet" className="underline-offset-4 hover:text-ink hover:underline">
+            Wallet
+          </Link>
           <Link href="/sent" className="underline-offset-4 hover:text-ink hover:underline">
             Sent
           </Link>
