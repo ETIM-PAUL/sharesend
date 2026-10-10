@@ -46,6 +46,8 @@ class FakeWallet implements AgenticWalletPort {
   nextOrderStatus: "PENDING" | "FINISHED" | "FAILED" = "FINISHED";
   swapOut = QUOTED;
   crashAfterSwap = false;
+  /** submitSwap returns an id that market-order list doesn't know (seen live), though the order is real. */
+  returnGhostOrderId = false;
   crashAfterSend = false;
   // selling
   sellOut = parseUnits("5", 18); // USDT received for the stock
@@ -94,7 +96,7 @@ class FakeWallet implements AgenticWalletPort {
       this.crashAfterSwap = false;
       throw new Error("process crashed after submitting the swap");
     }
-    return id;
+    return this.returnGhostOrderId ? `ghost-${id}` : id;
   }
   async getOrder(id: string) {
     const o = this.orders.get(id) ?? this.sells.get(id);
@@ -303,6 +305,25 @@ describe.skipIf(!url)("execution pipeline (Postgres + fakes)", () => {
       const [orderId] = [...wallet.orders.keys()];
       wallet.orders.get(orderId!)!.status = "FINISHED";
       expect((await runBuy(d, id)).status).toBe("READY");
+      expect(wallet.swapCalls).toBe(1);
+    });
+
+    it("adopts the real order when the id the CLI returned isn't in market-order list", async () => {
+      const { id } = await paidGift();
+      wallet.returnGhostOrderId = true;
+      expect((await runBuy(d, id)).status).toBe("READY");
+      expect(wallet.swapCalls).toBe(1);
+      const rec = (await db.query("SELECT ref, status FROM exec_records WHERE gift_id = $1 AND kind = 'swap'", [id])).rows[0];
+      expect(rec).toEqual({ ref: "order-1", status: "confirmed" });
+      expect((await getGift(db, id))!.buyTx).toBe("0xswap1");
+    });
+
+    it("still returns PENDING when the saved id is unknown and no matching order exists", async () => {
+      const { id } = await paidGift();
+      wallet.returnGhostOrderId = true;
+      wallet.nextOrderStatus = "FAILED"; // list skips FAILED orders, so nothing to adopt
+      const r = await runBuy(d, id);
+      expect(r.status).toBe("PENDING");
       expect(wallet.swapCalls).toBe(1);
     });
 

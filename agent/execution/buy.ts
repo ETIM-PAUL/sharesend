@@ -211,11 +211,27 @@ export async function runBuy(d: ExecDeps, giftId: string): Promise<ExecOutcome> 
       // Poll the order to a terminal state: an orderId is not a completed swap.
       const sleep = d.sleep ?? defaultSleep;
       const deadline = (d.now ?? Date.now)() + d.cfg.waitMs;
-      let order = await d.wallet.getOrder(orderId!);
+      // The id the CLI returned can differ from the one `market-order list` knows (seen live). When the saved id
+      // isn't found, adopt the matching order by token and time instead of polling a ghost forever.
+      const sinceMs = (rec?.started_at ?? (d.now ?? Date.now)()) - 10_000;
+      const { id: giftId, tokenAddress } = g;
+      const lookup = async () => {
+        let o = await d.wallet.getOrder(orderId!);
+        if (!o) {
+          const adopted = await d.wallet.findOrderSince(tokenAddress, sinceMs);
+          if (adopted && adopted !== orderId) {
+            orderId = adopted;
+            await updateRecord(d.db, giftId, "swap", { ref: orderId, status: "submitted" });
+            o = await d.wallet.getOrder(orderId);
+          }
+        }
+        return o;
+      };
+      let order = await lookup();
       while (!order || order.status === "PENDING") {
         if ((d.now ?? Date.now)() >= deadline) return { status: "PENDING", reason: `swap order ${orderId} still processing` };
         await sleep(d.cfg.pollMs);
-        order = await d.wallet.getOrder(orderId!);
+        order = await lookup();
       }
       if (order.status === "FAILED" || !order.txHash) {
         await updateRecord(d.db, g.id, "swap", { status: "failed" });
