@@ -7,6 +7,8 @@ import { searchTickers } from "../binance/rwa.js";
 import { BinanceError } from "../binance/errors.js";
 import { giftCommand } from "./gift.js";
 import { b402PayCommand } from "./b402pay.js";
+import { identityCommand } from "./identity.js";
+import { adminCommand } from "./admin.js";
 
 const fmtUsd = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtPct = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
@@ -58,6 +60,10 @@ async function main() {
     const q = args.join(" ");
     if (!q) throw new Error("usage: npm run cli -- search <text>");
     for (const r of (await searchTickers(q)).slice(0, 15)) console.log(`${r.ticker.padEnd(8)} ${r.name}  [${r.issuers.join(", ")}]`);
+  } else if (cmd === "admin") {
+    await adminCommand(args);
+  } else if (cmd === "identity") {
+    await identityCommand(args);
   } else if (cmd === "b402-pay") {
     await b402PayCommand(args);
   } else if (cmd === "economics" || cmd === "expense") {

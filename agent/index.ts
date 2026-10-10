@@ -6,6 +6,11 @@ import { BinanceError } from "./binance/errors.js";
 import { fetchTickerOptions, quoteGift } from "./pricing/quote.js";
 import { gifts } from "./routes/gifts.js";
 import { claims } from "./routes/claims.js";
+import { agentRoutes } from "./routes/agent.js";
+import { startScheduler } from "./jobs/runner.js";
+import { buildJobs } from "./jobs/jobs.js";
+import { setScheduler } from "./jobs/instance.js";
+import { advance } from "./execution/advance.js";
 import { getDb } from "./db/pool.js";
 import { migrate } from "./db/migrate.js";
 
@@ -84,11 +89,19 @@ app.get("/egress-ip", async (c) => {
 
 app.route("/", gifts);
 app.route("/", claims);
+app.route("/", agentRoutes);
 
-// Apply pending migrations on boot when a database is configured.
+// Apply pending migrations on boot, then start the autonomous jobs (JOBS=off disables them).
 if (process.env.DATABASE_URL)
   migrate(getDb())
-    .then((ran) => ran.length && console.log(`migrations applied: ${ran.join(", ")}`))
+    .then((ran) => {
+      if (ran.length) console.log(`migrations applied: ${ran.join(", ")}`);
+      if (process.env.JOBS === "off") return;
+      // Jobs that need `baw` (buys, keepalive) only run where it's installed and signed in.
+      const s = startScheduler(getDb(), buildJobs({ advance }), { bawEnabled: process.env.AUTO_EXECUTE === "true" });
+      setScheduler(s);
+      console.log(`jobs: ${s.jobs.map((j) => `${j.name}${j.enabled ? "" : " (off)"}`).join(", ")}`);
+    })
     .catch((e) => console.error("migration failed:", e.message));
 
 const port = Number(process.env.PORT ?? 8080);

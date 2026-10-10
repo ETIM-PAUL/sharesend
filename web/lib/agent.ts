@@ -214,3 +214,26 @@ export const claimApi = {
     }),
   holdings: (address: string) => call<{ holdings: Holding[]; balancesAvailable: boolean }>(`/holdings/${address}`),
 };
+
+// ---- The agent itself ----
+
+export interface AgentStatus {
+  agent: { name: string; liveTrading: boolean; vault: string | null; schedulerRunning: boolean };
+  identity: null | {
+    network: "bsc-mainnet" | "bsc-testnet";
+    agentId: number;
+    owner: string;
+    registry: string;
+    name: string;
+    description: string | null;
+    services: { name: string; endpoint: string }[];
+    verifiedOnChain: boolean;
+    links: { token: string; tx: string | null; scan: string };
+  };
+  jobs: { name: string; title: string; everyMinutes: number; enabled: boolean; reason: string | null; lastRun: { at: string; ok: boolean; summary: string } | null; runsLastDay: number; failuresLastDay: number }[];
+  session: null | { checkedAt: string; connected: boolean; sessionExpireTime?: string; inactiveSignOutTime?: string; activityExtended?: boolean | null };
+  proof: null | { checkedAt: string; summary: string; ok: boolean; tokens?: { ticker: string; gifts: number; owedRaw: string; heldRaw: string; ok: boolean }[] };
+  economics: { feesEarnedUsd: number; giftsWithFees: number; spentUsd: number; gasBnbWei: string; netUsd: number };
+}
+
+export const agentStatus = () => call<AgentStatus>("/agent/status");

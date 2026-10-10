@@ -172,3 +172,18 @@ export async function send(a: { tokenAddress: string; recipient: string; amount:
     90_000,
   );
 }
+
+// ---- Sign-in (references/authentication.md) ----
+
+export type SigninStart = { status: "ALREADY_CONNECTED" } | { urlForWeb: string; qrCodeId: string; expireAt: string; pairingCode: string };
+
+/** Starts sign-in: show `pairingCode` and `urlForWeb` verbatim; the user confirms in the Binance Wallet app. */
+export function signin(): Promise<SigninStart> {
+  return runBaw<SigninStart>(["auth", "signin"]);
+}
+
+/** Blocks until the user confirms in the app (or ~5 min timeout). Must be left running until it returns. */
+export async function verify(qrCodeId: string): Promise<{ status: string }> {
+  if (!/^[0-9a-f-]{36}$/i.test(qrCodeId)) throw new BawError("qrCodeId is not a UUID", "input");
+  return runBaw<{ status: string }>(["auth", "verify", "--qrCodeId", qrCodeId], 6 * 60_000);
+}

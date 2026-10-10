@@ -39,6 +39,11 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
               </nav>
             </header>
             <main className="flex-1">{children}</main>
+            <footer className="mt-12 border-t border-rule pt-4 text-sm text-ink-soft">
+              <Link href="/agent" className="underline-offset-4 hover:underline">
+                How ShareSend runs
+              </Link>
+            </footer>
           </div>
         </Providers>
       </body>

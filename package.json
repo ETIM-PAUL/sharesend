@@ -16,6 +16,7 @@
     "start": "tsx agent/index.ts"
   },
   "dependencies": {
+    "@bnbagent/sdk": "^0.6.0",
     "@hono/node-server": "^2.1.3",
     "dotenv": "^16.4.5",
     "hono": "^4.13.13",
