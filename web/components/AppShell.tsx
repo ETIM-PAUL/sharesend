@@ -1,10 +1,10 @@
 import Link from "next/link";
-import { Wordmark } from "@/components/Wordmark";
+import { Wordmark } from "./Wordmark";
 
-/** The app shell: one narrow column, the way it works on a phone. */
-export default function AppLayout({ children }: LayoutProps<"/">) {
+/** The app's frame. Narrow (one phone-width column) for most pages; wide for the send page, which sits chat and form side by side. */
+export function AppShell({ children, wide = false }: { children: React.ReactNode; wide?: boolean }) {
   return (
-    <div className="mx-auto flex min-h-dvh max-w-[460px] flex-col px-4 pb-12">
+    <div className={`mx-auto flex min-h-dvh flex-col px-4 pb-12 ${wide ? "max-w-[1040px]" : "max-w-[460px]"}`}>
       <header className="flex items-center justify-between py-5">
         <Wordmark />
         <nav className="flex gap-4 text-sm text-ink-soft">

@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { agent, type GiftQuote } from "@/lib/agent";
 import { countdown, usd } from "@/lib/format";
-import { saveSent } from "@/lib/sent";
+import { getSenderName, saveSenderName, saveSent } from "@/lib/sent";
+import { useHydrated } from "@/lib/useHydrated";
 import { Certificate } from "./Certificate";
 import { StockPicker, type Stock } from "./StockPicker";
 import { PayPanel, type PaidResult } from "./PayPanel";
@@ -18,6 +19,9 @@ import type { GiftDraft } from "@/lib/agent";
 
 const AMOUNTS = [5, 10, 20];
 
+/** Price, payment and the sent screen stay one phone-width column, centred in the wider page. */
+const Narrow = ({ children }: { children: React.ReactNode }) => <div className="mx-auto max-w-[460px]">{children}</div>;
+
 type Stage = "details" | "quote" | "pay" | "sent";
 
 export function SendFlow() {
@@ -26,7 +30,11 @@ export function SendFlow() {
   const [amount, setAmount] = useState("10");
   const [recipient, setRecipient] = useState("");
   const [message, setMessage] = useState("");
-  const [sender, setSender] = useState("");
+  // null until the sender types; then the saved name from last time (only readable in the browser) fills in.
+  const [senderInput, setSenderInput] = useState<string | null>(null);
+  const hydrated = useHydrated();
+  const sender = senderInput ?? (hydrated ? getSenderName() : "");
+  const setSender = (v: string) => setSenderInput(v);
   const [returnAs, setReturnAs] = useState<ReturnAs>("stock");
   const [when, setWhen] = useState<When>(WHEN_NOW);
   const [orderText, setOrderText] = useState("");
@@ -37,8 +45,19 @@ export function SendFlow() {
   const [error, setError] = useState<string | null>(null);
 
   const usdNum = Number(amount);
-  const ready = !!stock && usdNum > 0 && recipient.trim() && sender.trim();
   const whenRead = readWhen(when);
+
+  /** What's still missing from the form, in the order the fields appear. */
+  function missing(): { field: string; text: string }[] {
+    const m: { field: string; text: string }[] = [];
+    if (!stock) m.push({ field: "stock", text: "pick a stock" });
+    if (!(usdNum >= 1)) m.push({ field: "amount", text: "enter an amount of at least $1" });
+    if (!recipient.trim()) m.push({ field: "recipient-name", text: "say who it's for" });
+    if (!sender.trim()) m.push({ field: "sender-name", text: "add your name" });
+    return m;
+  }
+
+  const focusField = (id: string) => setTimeout(() => document.getElementById(id)?.focus(), 0);
 
   /** A chat draft fills in the form. Nothing is sent or bought until you've checked it and paid. */
   function applyDraft(d: GiftDraft, text: string) {
@@ -50,13 +69,16 @@ export function SendFlow() {
     setOrderText(d.order ? text : "");
     setWhen(d.order ? { mode: "drop", dropPct: String(d.order.dropPct), deadline: toLocalInput(new Date(d.order.deadline)) } : WHEN_NOW);
     setError(null);
-    formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    // The chat doesn't know the sender's name: if it's still empty, that's where to go next.
+    if (!sender.trim()) focusField("sender-name");
+    else formRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
   async function getPrice() {
     if (!stock) return;
     const checked = readWhen(when, Date.now());
     if (!checked.ok) return setError(checked.error);
+    saveSenderName(sender.trim());
     setLoading(true);
     setError(null);
     try {
@@ -89,19 +111,29 @@ export function SendFlow() {
   if (stage === "details")
     return (
       <div>
-        <h1 className="numerals text-[2.1rem] font-bold leading-[1.1] text-ink">Send someone a piece of a company they love.</h1>
-        <p className="mt-3 text-[1rem] text-ink-soft">They get a link on WhatsApp and claim real stock with just their email. You pay in dollar stablecoins.</p>
+        <h1 className="numerals max-w-[34rem] text-[2.1rem] font-bold leading-[1.1] text-ink lg:text-5xl">Send someone a piece of a company they love.</h1>
+        <p className="mt-3 max-w-[34rem] text-[1rem] text-ink-soft">They get a link on WhatsApp and claim real stock with just their email. You pay in dollar stablecoins.</p>
 
-        <div className="mt-7">
-          <ChatPanel onDraft={applyDraft} />
-        </div>
+        {/* Chat on the left, the form it fills in on the right; stacked on a phone. */}
+        <div className="mt-7 grid items-start gap-7 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-12">
+          <div className="lg:sticky lg:top-6">
+            <ChatPanel onDraft={applyDraft} />
+          </div>
 
         <form
           ref={formRef}
-          className="mt-7 scroll-mt-4 space-y-5"
+          className="scroll-mt-4 space-y-5"
           onSubmit={(e) => {
             e.preventDefault();
-            if (ready) getPrice();
+            const m = missing();
+            if (m.length) {
+              setError(`Almost there: ${m.map((x) => x.text).join(", ")}.`);
+              const first = m[0]!.field;
+              if (first === "stock") document.getElementById("stock-picker")?.scrollIntoView({ block: "center" });
+              else focusField(first === "amount" ? "custom-amount" : first);
+              return;
+            }
+            getPrice();
           }}
         >
           <StockPicker value={stock} onChange={setStock} />
@@ -118,12 +150,12 @@ export function SendFlow() {
                   ${a}
                 </button>
               ))}
-              <Input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))} aria-label="Custom amount" className="numerals !w-24 text-lg" />
+              <Input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))} aria-label="Custom amount" id="custom-amount" className="numerals !w-24 text-lg" />
             </div>
           </Field>
 
           <Field label="Who is it for?">
-            <Input value={recipient} onChange={(e) => setRecipient(e.target.value)} placeholder="Ada" maxLength={60} required />
+            <Input id="recipient-name" value={recipient} onChange={(e) => setRecipient(e.target.value)} placeholder="Ada" maxLength={60} />
           </Field>
 
           <Field label="A note for them" hint="Optional. They'll see it when they open the gift.">
@@ -131,7 +163,7 @@ export function SendFlow() {
           </Field>
 
           <Field label="Your name">
-            <Input value={sender} onChange={(e) => setSender(e.target.value)} placeholder="Paul" maxLength={60} required />
+            <Input id="sender-name" value={sender} onChange={(e) => setSender(e.target.value)} placeholder="Your first name" maxLength={60} autoComplete="given-name" />
           </Field>
 
           <WhenChoice value={when} onChange={setWhen} />
@@ -139,17 +171,24 @@ export function SendFlow() {
           <ReturnChoice value={returnAs} onChange={setReturnAs} />
 
           {error ? <Notice kind="error">{error}</Notice> : null}
-          <Button type="submit" disabled={!ready || loading}>
+          <Button type="submit" disabled={loading}>
             {loading ? "Getting the price…" : "See the price"}
           </Button>
         </form>
+        </div>
       </div>
     );
 
-  if (stage === "quote" && quote) return <QuoteStage order={whenRead.ok ? whenRead.order : null} quote={quote} recipient={recipient} sender={sender} message={message} onBack={() => setStage("details")} onRefresh={getPrice} onPay={() => setStage("pay")} loading={loading} error={error} />;
+  if (stage === "quote" && quote)
+    return (
+      <Narrow>
+        <QuoteStage order={whenRead.ok ? whenRead.order : null} quote={quote} recipient={recipient} sender={sender} message={message} onBack={() => setStage("details")} onRefresh={getPrice} onPay={() => setStage("pay")} loading={loading} error={error} />
+      </Narrow>
+    );
 
   if (stage === "pay" && quote)
     return (
+      <Narrow>
       <div className="space-y-5">
         <Certificate ticker={quote.ticker} companyName={quote.name} sharesOut={quote.sharesOut} amountUsd={quote.giftUsd} issuerLabel={quote.issuerLabel} recipientName={recipient} senderName={sender} message={message} />
         <PayPanel
@@ -170,9 +209,15 @@ export function SendFlow() {
           Back
         </Button>
       </div>
+      </Narrow>
     );
 
-  if (stage === "sent" && quote && paid) return <SentStage quote={quote} paid={paid} recipient={recipient} sender={sender} message={message} />;
+  if (stage === "sent" && quote && paid)
+    return (
+      <Narrow>
+        <SentStage quote={quote} paid={paid} recipient={recipient} sender={sender} message={message} />
+      </Narrow>
+    );
 
   return null;
 }

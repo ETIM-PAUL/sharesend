@@ -46,7 +46,7 @@ export function StockPicker({ value, onChange }: { value: Stock | null; onChange
   };
 
   return (
-    <div>
+    <div id="stock-picker">
       <span className="mb-1.5 block text-sm font-medium text-ink">Stock</span>
       <div className="flex flex-wrap gap-2" role="listbox" aria-label="Popular stocks">
         {POPULAR.map((s) => {

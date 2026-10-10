@@ -32,3 +32,22 @@ export function saveSent(g: SentGift): void {
     // Storage blocked (private mode): the gift still exists; only this device's list is missing it.
   }
 }
+
+const NAME_KEY = "sharesend:name";
+
+/** The sender's name from last time, so they only type it once on this device. */
+export function getSenderName(): string {
+  try {
+    return localStorage.getItem(NAME_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function saveSenderName(name: string): void {
+  try {
+    localStorage.setItem(NAME_KEY, name.slice(0, 60));
+  } catch {
+    // Storage blocked: they'll type it again next time.
+  }
+}
