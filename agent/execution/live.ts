@@ -1,6 +1,7 @@
 // Wires the pipeline to the real world. LIVE_TRADING=false → dry-run ports: real quotes, session checks and
 // Transaction API simulations, but no swaps, sends or signed transactions.
-import { parseUnits } from "viem";
+import { formatUnits, parseUnits } from "viem";
+import { stockInfo } from "../claims/stock.js";
 import { config } from "../config.js";
 import type { Db } from "../db/pool.js";
 import * as baw from "../baw/cli.js";
@@ -78,6 +79,14 @@ export function liveWallet(): AgenticWalletPort {
 
 export function liveMarket(walletAddress: string): MarketPort {
   return {
+    async pricePerShare(token, usd) {
+      const info = await stockInfo(token);
+      if (!info) throw new Error(`unknown stock token ${token}`);
+      const out = await this.apiQuoteOut(token, usd);
+      const shares = Number(formatUnits(out, info.decimals)) * info.ratio;
+      if (!(shares > 0)) throw new Error("quote returned zero output");
+      return usd / shares;
+    },
     async apiSellQuoteOut(fromToken, rawAmount) {
       const { quote } = await getQuote({
         binanceChainId: BSC_CHAIN_ID,

@@ -65,6 +65,19 @@ function publicGift(g: Gift) {
     claimExpiresAt: g.claimExpiresAt,
     createdAt: g.createdAt,
     returnAs: g.returnAs,
+    // A conditional order: where it stands, never anything private.
+    order: g.order
+      ? {
+          dropPct: g.order.dropPct,
+          baseline: g.order.baseline,
+          trigger: g.order.trigger,
+          deadline: g.order.deadline,
+          text: g.order.text,
+          triggered: !!g.order.triggeredAt,
+          lastPrice: g.order.lastPrice,
+          checkedAt: g.order.checkedAt,
+        }
+      : null,
     dryRun: g.dryRun,
     failureReason: g.failureReason,
     // Public on-chain anyway; real hashes only (dry runs use synthetic ones).

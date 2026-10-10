@@ -6,6 +6,7 @@ import { formatUnits, parseUnits } from "viem";
 import type { Db } from "../db/pool.js";
 import { advanceStep, getGift, transition, type Gift } from "../gifts/ledger.js";
 import { BawError } from "../baw/cli.js";
+import { decideOrder, hasWaitingOrder, markTriggered, recordPrice } from "./order.js";
 import { StillPendingError, type AgenticWalletPort, type ChainPort, type ExecKind, type MarketPort, type VaultPort } from "./ports.js";
 
 export interface ExecConfig {
@@ -29,6 +30,8 @@ export interface ExecDeps {
   cfg: ExecConfig;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
+  /** Wall-clock time (ms) for deadlines, separate from the polling clock above. Defaults to Date.now. */
+  wall?: () => number;
 }
 
 export type ExecOutcome =
@@ -37,6 +40,7 @@ export type ExecOutcome =
   | { status: "PENDING"; reason: string } // waiting for a tx/order: run again later
   | { status: "FAILED"; reason: string; gift: Gift } // buy aborted before the swap: refund next
   | { status: "RELEASED"; reason: string; gift: Gift } // claim simulation failed: gift back to READY
+  | { status: "WAITING"; reason: string } // a conditional order whose price hasn't been reached yet
   | { status: "NOOP"; gift: Gift };
 
 /** Abort before the swap completed: safe to refund. */
@@ -144,6 +148,20 @@ export async function runBuy(d: ExecDeps, giftId: string): Promise<ExecOutcome> 
     if (g.usdCost > d.cfg.maxGiftUsd) {
       g = await transition(d.db, g.id, "PAID", "REFUNDING", { failureReason: `over MAX_GIFT_USD (${d.cfg.maxGiftUsd})` });
       return { status: "FAILED", reason: g.failureReason!, gift: g };
+    }
+    // A conditional order waits here until its price is reached, and refunds at its deadline. None of this needs the
+    // Agentic Wallet, so it keeps working (and keeps its deadline) while the wallet is signed out.
+    if (hasWaitingOrder(g)) {
+      const price = await d.market.pricePerShare(g.tokenAddress, g.usdCost).catch(() => null);
+      await recordPrice(d.db, g.id, price);
+      const decision = decideOrder(g.order!, price, (d.wall ?? Date.now)());
+      if (decision.action === "wait") return { status: "WAITING", reason: decision.reason };
+      if (decision.action === "expire") {
+        const reason = `Not bought: ${decision.reason}. Your payment is being refunded.`;
+        g = await transition(d.db, g.id, "PAID", "REFUNDING", { failureReason: reason });
+        return { status: "FAILED", reason, gift: g };
+      }
+      await markTriggered(d.db, g.id);
     }
     if (!(await d.wallet.isConnected())) return { status: "QUEUED", reason: "Agentic Wallet signed out" };
     const drift = await checkQuoteDrift(d, g);

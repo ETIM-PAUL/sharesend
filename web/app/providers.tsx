@@ -16,7 +16,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
       config={{
         // Senders mostly pay from a wallet they already use; email creates a wallet for anyone without one.
         loginMethods: ["wallet", "email"],
-        appearance: { walletChainType: "ethereum-only", accentColor: "#2e6b57", showWalletLoginFirst: true, landingHeader: "Sign in to ShareSend" },
+        appearance: { theme: "dark", walletChainType: "ethereum-only", accentColor: "#f0b445", showWalletLoginFirst: true, landingHeader: "Sign in to ShareSend" },
         embeddedWallets: { ethereum: { createOnLogin: "users-without-wallets" } },
         defaultChain: bscChain,
         supportedChains: [bscChain],

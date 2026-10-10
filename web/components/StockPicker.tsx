@@ -58,9 +58,9 @@ export function StockPicker({ value, onChange }: { value: Stock | null; onChange
               role="option"
               aria-selected={on}
               onClick={() => pick(s)}
-              className={`rounded-full border px-3 py-1.5 text-sm transition ${on ? "border-engrave bg-engrave text-sheet" : "border-rule bg-sheet text-ink hover:border-engrave"}`}
+              className={`rounded-full border px-3 py-1.5 text-sm transition ${on ? "border-engrave bg-engrave text-on-engrave" : "border-rule bg-sheet text-ink hover:border-engrave"}`}
             >
-              <span className="font-semibold">{s.ticker}</span> <span className={on ? "text-sheet/80" : "text-ink-soft"}>{s.name}</span>
+              <span className="font-semibold">{s.ticker}</span> <span className={on ? "text-on-engrave/70" : "text-ink-soft"}>{s.name}</span>
             </button>
           );
         })}

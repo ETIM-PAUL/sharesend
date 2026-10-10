@@ -151,7 +151,7 @@ function ClaimPanel({ id, code, data, onClaimed }: { id: string; code: string; d
     );
 
   if (g.status === "CLAIMING") return <Notice>Sending your shares to your wallet. This usually takes under a minute.</Notice>;
-  if (g.status === "PAID" || g.status === "BUYING") return <Notice>Your stock is being bought right now. This page updates by itself, and you can claim it in a few minutes.</Notice>;
+  if (g.status === "PAID" || g.status === "BUYING") return <Notice>Your stock hasn&apos;t been bought yet. This page updates by itself, and you can claim it as soon as it&apos;s ready.</Notice>;
   if (g.status === "AWAITING_PAYMENT") return <Notice>This gift hasn&apos;t been paid for yet.</Notice>;
   if (g.status === "READY" && g.expired) return <Notice kind="error">This gift wasn&apos;t claimed in time, so it&apos;s going back to {g.senderName}.</Notice>;
   if (g.status !== "READY")

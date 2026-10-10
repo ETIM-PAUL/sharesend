@@ -1,12 +1,13 @@
-// Small shared pieces. Buttons are pills (they act, like a message's send button); fields are softly squared.
+// Small shared pieces. Buttons are pills (they act, like a send button); fields are softly squared.
+import Link from "next/link";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, TextareaHTMLAttributes } from "react";
 
 export function Button({ variant = "primary", className = "", ...p }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "quiet" | "whatsapp" }) {
   const look =
     variant === "primary"
-      ? "bg-engrave text-sheet hover:brightness-110"
+      ? "bg-engrave text-on-engrave hover:brightness-110"
       : variant === "whatsapp"
-        ? "bg-whatsapp text-white hover:brightness-110"
+        ? "bg-whatsapp text-paper hover:brightness-110"
         : "border border-rule text-ink hover:bg-sheet";
   return (
     <button
@@ -41,5 +42,20 @@ export function Notice({ kind = "info", children }: { kind?: "info" | "error"; c
     <div role={kind === "error" ? "alert" : "status"} className={`rounded-[10px] px-3.5 py-3 text-sm ${kind === "error" ? "bg-error-bg text-error-ink" : "bg-notice-bg text-notice-ink"}`}>
       {children}
     </div>
+  );
+}
+
+/** A link that looks like a button, for navigation (marketing page, calls to action). */
+export function ButtonLink({ href, variant = "primary", className = "", children, external }: { href: string; variant?: "primary" | "quiet"; className?: string; children: React.ReactNode; external?: boolean }) {
+  const look = variant === "primary" ? "bg-engrave text-on-engrave hover:brightness-110" : "border border-rule text-ink hover:border-ink-soft hover:bg-sheet";
+  const cls = `inline-flex items-center justify-center rounded-full px-6 py-3.5 text-[0.98rem] font-semibold transition ${look} ${className}`;
+  return external ? (
+    <a href={href} className={cls} target="_blank" rel="noopener noreferrer">
+      {children}
+    </a>
+  ) : (
+    <Link href={href} className={cls}>
+      {children}
+    </Link>
   );
 }

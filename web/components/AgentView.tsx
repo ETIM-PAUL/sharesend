@@ -2,17 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { agentStatus, type AgentStatus } from "@/lib/agent";
-import { shortAddr, usd } from "@/lib/format";
+import { ago, shortAddr, usd } from "@/lib/format";
 import { Notice } from "./ui";
-
-function ago(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
-  if (s < 90) return "just now";
-  if (s < 3600) return `${Math.round(s / 60)} min ago`;
-  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
-  return `${Math.round(s / 86400)} d ago`;
-}
 
 const when = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 

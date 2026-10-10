@@ -75,7 +75,7 @@ export function Holdings() {
       {!loading && !result!.holdings.length && !result!.error ? (
         <div className="space-y-3">
           <p className="text-ink">Gifts you claim show up here.</p>
-          <Link href="/">
+          <Link href="/send">
             <Button variant="quiet">Send someone a gift</Button>
           </Link>
         </div>

@@ -126,6 +126,53 @@ describe.skipIf(!url)("autonomous jobs (Postgres)", () => {
     expect(advanced).toEqual([a]);
   });
 
+  describe("conditional orders", () => {
+    const order = (hours = 2) => ({ dropPct: 0.5, baseline: 230, deadline: new Date(Date.now() + hours * 3_600_000) });
+    const paid = async (withOrder = true) => {
+      const id = await gift({ order: withOrder ? order() : undefined } as never);
+      await transition(db, id, "AWAITING_PAYMENT", "PAID");
+      return id;
+    };
+
+    it("price-watch looks at every waiting order, oldest deadline first, and nothing else", async () => {
+      const a = await paid();
+      const plain = await paid(false);
+      await set(a, "order_deadline = now() + interval '1 hour'");
+      nextOutcome = () => "WAITING";
+      const r = await runJobOnce(db, job("price-watch"));
+      expect(r).toMatchObject({ ok: true, summary: "1 waiting order: 1 still waiting, 0 bought, 0 refunded after their deadline" });
+      expect(advanced).toEqual([a]);
+      expect(advanced).not.toContain(plain);
+    });
+
+    it("reports bought and refunded orders", async () => {
+      const bought = await paid();
+      const expired = await paid();
+      await set(bought, "order_deadline = now() + interval '1 hour'");
+      await set(expired, "order_deadline = now() + interval '2 hours'");
+      nextOutcome = (id) => (id === bought ? "READY" : "FAILED");
+      expect(await runJobOnce(db, job("price-watch"))).toMatchObject({ summary: "2 waiting orders: 0 still waiting, 1 bought, 1 refunded after their deadline" });
+    });
+
+    it("an order already triggered is the buy queue's, not the watcher's", async () => {
+      const id = await paid();
+      await set(id, "order_triggered_at = now()");
+      nextOutcome = () => "READY";
+      expect(await runJobOnce(db, job("price-watch"))).toMatchObject({ summary: "no orders waiting for a price" });
+      await runJobOnce(db, job("buy-queue"));
+      expect(advanced).toEqual([id]);
+    });
+
+    it("the buy queue leaves waiting orders alone, so they can't crowd out ordinary gifts", async () => {
+      const waiting = await Promise.all([1, 2, 3, 4, 5, 6].map(() => paid()));
+      const plain = await paid(false);
+      nextOutcome = () => "READY";
+      await runJobOnce(db, job("buy-queue"));
+      expect(advanced).toEqual([plain]);
+      expect(waiting).toHaveLength(6);
+    });
+  });
+
   it("reconcile alerts once when holdings fall short, not on every run", async () => {
     const id = await gift();
     await set(id, "status = 'READY', token_amount = 100, claim_expires_at = now() + interval '1 day'");

@@ -80,3 +80,15 @@ Each gift has a `return_as` setting, chosen by the sender:
 - The two sell quotes (`baw` and the Trading API) must agree within `MAX_QUOTE_DRIFT_PCT`, as for buys.
 
 **Not yet tried live:** selling a stock token with `baw market-order swap` (only the quote has been checked, and `--fromTokenQty` units for bStocks, which have a display multiplier, are unconfirmed). The Phase 11 rehearsal should include one cancel-as-USDT.
+
+## Chat and conditional orders
+
+**Tell the agent** (on `/send`) turns plain English into a draft gift for the form: "Send Ada $5 of Nvidia, but only if it drops 0.5% by tomorrow 2PM". The model has a single tool, `propose_gift`, that only returns a draft. Code validates every field (the stock must exist, $1 to `MAX_GIFT_USD`, a deadline with a time zone, 10 minutes to 7 days ahead, a drop of 0–50%) and the sender still checks the form, signs in and pays. It can't buy, send or sign anything. Chat is switched off (and hidden) unless `ANTHROPIC_API_KEY` is set; `CHAT_MODEL` (default `claude-haiku-4-5-20251001`) and `CHAT_DAILY_LIMIT` (default 400 a day, 8 a minute per IP) cap the cost. Message text is never logged.
+
+**A conditional order** is a paid gift that waits in `PAID`:
+- The sender pays up front, so the money is already in the vault.
+- The `price-watch` job (every minute) compares the live price per share with the trigger (baseline price at order time × (1 − drop%)). When the price is at or below it, the order is marked triggered and bought like any other gift.
+- If the deadline passes first, the gift moves to `REFUNDING` and the full payment (gift plus fee) goes back to the sender. Past the deadline it never buys, even if the price is low at that moment.
+- Once triggered, a signed-out trading wallet only delays the buy; the deadline no longer applies.
+- Waiting and refunding don't need the trading wallet, so deadlines hold while it's signed out.
+- The sender can cancel any time before it buys; that is the existing paid-gift cancel, which refunds in full.

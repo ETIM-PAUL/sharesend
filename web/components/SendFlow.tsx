@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { agent, type GiftQuote } from "@/lib/agent";
 import { countdown, usd } from "@/lib/format";
@@ -12,6 +12,9 @@ import { GiftProgress, useGift } from "./GiftProgress";
 import { ShareCard } from "./ShareCard";
 import { Button, Field, Input, Notice, TextArea } from "./ui";
 import { ReturnChoice, type ReturnAs } from "./ReturnChoice";
+import { ChatPanel } from "./ChatPanel";
+import { readWhen, toLocalInput, WHEN_NOW, WhenChoice, type When } from "./WhenChoice";
+import type { GiftDraft } from "@/lib/agent";
 
 const AMOUNTS = [5, 10, 20];
 
@@ -25,6 +28,9 @@ export function SendFlow() {
   const [message, setMessage] = useState("");
   const [sender, setSender] = useState("");
   const [returnAs, setReturnAs] = useState<ReturnAs>("stock");
+  const [when, setWhen] = useState<When>(WHEN_NOW);
+  const [orderText, setOrderText] = useState("");
+  const formRef = useRef<HTMLFormElement>(null);
   const [quote, setQuote] = useState<GiftQuote | null>(null);
   const [paid, setPaid] = useState<PaidResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -32,9 +38,25 @@ export function SendFlow() {
 
   const usdNum = Number(amount);
   const ready = !!stock && usdNum > 0 && recipient.trim() && sender.trim();
+  const whenRead = readWhen(when);
+
+  /** A chat draft fills in the form. Nothing is sent or bought until you've checked it and paid. */
+  function applyDraft(d: GiftDraft, text: string) {
+    setStock({ ticker: d.ticker, name: d.companyName });
+    setAmount(String(d.usd));
+    setRecipient(d.recipientName);
+    setMessage(d.message);
+    setReturnAs(d.returnAs);
+    setOrderText(d.order ? text : "");
+    setWhen(d.order ? { mode: "drop", dropPct: String(d.order.dropPct), deadline: toLocalInput(new Date(d.order.deadline)) } : WHEN_NOW);
+    setError(null);
+    formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   async function getPrice() {
     if (!stock) return;
+    const checked = readWhen(when, Date.now());
+    if (!checked.ok) return setError(checked.error);
     setLoading(true);
     setError(null);
     try {
@@ -70,8 +92,13 @@ export function SendFlow() {
         <h1 className="numerals text-[2.1rem] font-bold leading-[1.1] text-ink">Send someone a piece of a company they love.</h1>
         <p className="mt-3 text-[1rem] text-ink-soft">They get a link on WhatsApp and claim real stock with just their email. You pay in dollar stablecoins.</p>
 
+        <div className="mt-7">
+          <ChatPanel onDraft={applyDraft} />
+        </div>
+
         <form
-          className="mt-7 space-y-5"
+          ref={formRef}
+          className="mt-7 scroll-mt-4 space-y-5"
           onSubmit={(e) => {
             e.preventDefault();
             if (ready) getPrice();
@@ -86,7 +113,7 @@ export function SendFlow() {
                   key={a}
                   type="button"
                   onClick={() => setAmount(String(a))}
-                  className={`numerals rounded-full border px-4 py-2 text-lg ${Number(amount) === a ? "border-engrave bg-engrave text-sheet" : "border-rule bg-sheet text-ink"}`}
+                  className={`numerals rounded-full border px-4 py-2 text-lg ${Number(amount) === a ? "border-engrave bg-engrave text-on-engrave" : "border-rule bg-sheet text-ink"}`}
                 >
                   ${a}
                 </button>
@@ -107,6 +134,8 @@ export function SendFlow() {
             <Input value={sender} onChange={(e) => setSender(e.target.value)} placeholder="Paul" maxLength={60} required />
           </Field>
 
+          <WhenChoice value={when} onChange={setWhen} />
+
           <ReturnChoice value={returnAs} onChange={setReturnAs} />
 
           {error ? <Notice kind="error">{error}</Notice> : null}
@@ -117,7 +146,7 @@ export function SendFlow() {
       </div>
     );
 
-  if (stage === "quote" && quote) return <QuoteStage quote={quote} recipient={recipient} sender={sender} message={message} onBack={() => setStage("details")} onRefresh={getPrice} onPay={() => setStage("pay")} loading={loading} error={error} />;
+  if (stage === "quote" && quote) return <QuoteStage order={whenRead.ok ? whenRead.order : null} quote={quote} recipient={recipient} sender={sender} message={message} onBack={() => setStage("details")} onRefresh={getPrice} onPay={() => setStage("pay")} loading={loading} error={error} />;
 
   if (stage === "pay" && quote)
     return (
@@ -130,6 +159,7 @@ export function SendFlow() {
           recipientName={recipient.trim()}
           message={message.trim()}
           returnAs={returnAs}
+          order={whenRead.ok && whenRead.order ? { ...whenRead.order, text: orderText || undefined } : undefined}
           onPaid={onPaid}
           onExpired={() => {
             setError("The held price ran out. Here's a fresh one.");
@@ -147,7 +177,7 @@ export function SendFlow() {
   return null;
 }
 
-function QuoteStage(p: { quote: GiftQuote; recipient: string; sender: string; message: string; onBack: () => void; onRefresh: () => void; onPay: () => void; loading: boolean; error: string | null }) {
+function QuoteStage(p: { order: { dropPct: number; deadline: string } | null; quote: GiftQuote; recipient: string; sender: string; message: string; onBack: () => void; onRefresh: () => void; onPay: () => void; loading: boolean; error: string | null }) {
   const q = p.quote;
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -170,6 +200,12 @@ function QuoteStage(p: { quote: GiftQuote; recipient: string; sender: string; me
       </div>
 
       <p className="text-sm text-ink-soft">{q.reason}.</p>
+      {p.order ? (
+        <Notice>
+          <span className="font-semibold">Waits for the price.</span> You pay {usd(q.totalUsd)} now. The agent buys only if {q.ticker} falls to about {usd(q.pricePerShare * (1 - p.order.dropPct / 100))} ({p.order.dropPct}% below today&apos;s {usd(q.pricePerShare)}) before{" "}
+          {new Date(p.order.deadline).toLocaleString(undefined, { weekday: "long", hour: "numeric", minute: "2-digit" })}. If it doesn&apos;t, you&apos;re refunded in full. You can cancel any time before it buys.
+        </Notice>
+      ) : null}
       {q.warnings
         .filter((w) => w.code === "WEEKEND_PREMIUM")
         .map((w) => (
@@ -182,7 +218,7 @@ function QuoteStage(p: { quote: GiftQuote; recipient: string; sender: string; me
       {p.error ? <Notice kind="error">{p.error}</Notice> : null}
       {left > 0 ? (
         <>
-          <Button onClick={p.onPay}>Pay {usd(q.totalUsd)}</Button>
+          <Button onClick={p.onPay}>{p.order ? `Pay ${usd(q.totalUsd)} and wait for the price` : `Pay ${usd(q.totalUsd)}`}</Button>
           <p className="text-center text-xs text-ink-soft">Price good for {countdown(left)}</p>
         </>
       ) : (

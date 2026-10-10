@@ -42,9 +42,14 @@ function steps(g: PublicGift): { label: string; detail?: string; state: StepStat
   const buying: StepState = s === "PAID" || s === "BUYING" ? "now" : ["READY", "CLAIMING", "CLAIMED", "RETURNING", "RETURNED"].includes(s) ? "done" : "later";
   const ready: StepState = s === "READY" ? "now" : ["CLAIMING", "CLAIMED"].includes(s) ? "done" : "later";
   const claimed: StepState = s === "CLAIMED" ? "done" : s === "CLAIMING" ? "now" : "later";
-  const buyDetail =
-    s === "PAID"
-      ? "Queued. The purchase starts as soon as the trading desk is online."
+  const o = g.order;
+  const waitingForPrice = s === "PAID" && !!o && !o.triggered;
+  const buyDetail = waitingForPrice
+    ? `Waiting for ${g.ticker} to fall to $${o.trigger.toFixed(2)} (${o.dropPct}% below $${o.baseline.toFixed(2)}). Buys automatically if it does by ${new Date(o.deadline).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}; otherwise you're refunded in full.${o.lastPrice ? ` Last seen $${o.lastPrice.toFixed(2)}.` : ""}`
+    : s === "PAID"
+      ? o?.triggered
+        ? "The price was reached. Buying as soon as the trading desk is online."
+        : "Queued. The purchase starts as soon as the trading desk is online."
       : g.step === "forwarded"
         ? "Buying the stock now"
         : g.step === "swapped"
@@ -54,7 +59,7 @@ function steps(g: PublicGift): { label: string; detail?: string; state: StepStat
             : undefined;
   return [
     { label: s === "AWAITING_PAYMENT" ? "Waiting for payment" : "Paid", state: paid },
-    { label: buying === "done" ? `Bought ${g.ticker}` : `Buying ${g.ticker}`, detail: buyDetail, state: buying },
+    { label: buying === "done" ? `Bought ${g.ticker}` : waitingForPrice ? `Waiting to buy ${g.ticker}` : `Buying ${g.ticker}`, detail: buyDetail, state: buying },
     { label: `Ready for ${g.recipientName} to claim`, detail: s === "READY" && g.claimExpiresAt ? `Unclaimed gifts come back to you on ${new Date(g.claimExpiresAt).toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" })}` : undefined, state: ready },
     { label: "Claimed", detail: s === "CLAIMING" ? "Sending it to their wallet" : undefined, state: claimed },
   ];
@@ -73,6 +78,8 @@ function outcome(g: PublicGift): string | null {
         .join(" ");
     case "FAILED":
     case "REFUNDING":
+      // A reason that already says it's being refunded (an order whose price wasn't reached) stands on its own.
+      if (g.failureReason?.startsWith("Not bought:")) return g.failureReason;
       return `The purchase didn't go through${g.failureReason ? ` (${g.failureReason})` : ""}. Your payment is being refunded.`;
     case "REFUNDED":
       return "Refunded in full to the wallet you paid from.";
@@ -95,7 +102,7 @@ export function GiftProgress({ gift }: { gift: PublicGift }) {
               <span
                 aria-hidden
                 className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
-                  st.state === "done" ? "bg-engrave text-sheet" : st.state === "now" ? "border-2 border-engrave text-engrave" : "border border-rule text-ink-soft"
+                  st.state === "done" ? "bg-engrave text-on-engrave" : st.state === "now" ? "border-2 border-engrave text-engrave" : "border border-rule text-ink-soft"
                 }`}
               >
                 {st.state === "done" ? "✓" : i + 1}

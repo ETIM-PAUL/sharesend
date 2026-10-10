@@ -47,9 +47,31 @@ export interface Gift {
   claimedAt: Date | null;
   /** What the sender wants if the gift goes back to them: the stock itself, or USDT from selling it. */
   returnAs: ReturnAs;
+  /** Set for a conditional order; null for a gift that is bought right away. */
+  order: GiftOrder | null;
 }
 
 export type ReturnAs = "stock" | "usdt";
+
+/** "Buy when the price per share is at or below `trigger`, by `deadline`; otherwise refund." */
+export interface GiftOrder {
+  dropPct: number;
+  /** Price per share when the order was placed. */
+  baseline: number;
+  trigger: number;
+  deadline: Date;
+  /** What the sender asked for, in their own words. */
+  text: string | null;
+  triggeredAt: Date | null;
+  lastPrice: number | null;
+  checkedAt: Date | null;
+}
+
+export const MAX_ORDER_DAYS = 7;
+export const MAX_ORDER_DROP_PCT = 50;
+
+/** Trigger price for a drop below a baseline, rounded to 6 places. */
+export const triggerPrice = (baseline: number, dropPct: number) => Math.round(baseline * (1 - dropPct / 100) * 1e6) / 1e6;
 
 // ---- Errors ----
 
@@ -120,6 +142,19 @@ function toGift(r: any): Gift {
     readyAt: r.ready_at ?? null,
     claimedAt: r.claimed_at ?? null,
     returnAs: r.return_as ?? "stock",
+    order:
+      r.order_trigger === null || r.order_trigger === undefined
+        ? null
+        : {
+            dropPct: Number(r.order_drop_pct),
+            baseline: Number(r.order_baseline),
+            trigger: Number(r.order_trigger),
+            deadline: r.order_deadline,
+            text: r.order_text ?? null,
+            triggeredAt: r.order_triggered_at ?? null,
+            lastPrice: r.order_last_price === null || r.order_last_price === undefined ? null : Number(r.order_last_price),
+            checkedAt: r.order_checked_at ?? null,
+          },
   };
 }
 
@@ -142,6 +177,8 @@ export interface NewGift {
   dryRun?: boolean;
   paymentRequirements?: unknown[];
   returnAs?: ReturnAs;
+  /** Buy only when the price drops by `dropPct` from `baseline` (price per share now), by `deadline`. */
+  order?: { dropPct: number; baseline: number; deadline: Date; text?: string };
 }
 
 export interface GiftCaps {
@@ -178,6 +215,14 @@ export async function createGift(db: Db, input: NewGift, caps: GiftCaps): Promis
   if (!isAddress(input.tokenAddress)) throw new Error("tokenAddress is not a valid address");
   if (!(input.usdCost > 0) || !(input.feeUsd >= 0)) throw new Error("usdCost must be > 0 and feeUsd ≥ 0");
   if (input.quotedTokenAmount <= 0n) throw new Error("quotedTokenAmount must be > 0");
+  if (input.order) {
+    const o = input.order;
+    if (!(o.dropPct > 0 && o.dropPct <= MAX_ORDER_DROP_PCT)) throw new Error(`the price drop must be more than 0% and at most ${MAX_ORDER_DROP_PCT}%`);
+    if (!(o.baseline > 0)) throw new Error("the order needs a starting price");
+    const ms = o.deadline.getTime() - Date.now();
+    if (!(ms > 5 * 60_000)) throw new Error("the deadline must be at least 5 minutes from now");
+    if (ms > MAX_ORDER_DAYS * 86_400_000) throw new Error(`the deadline can be at most ${MAX_ORDER_DAYS} days away`);
+  }
   if (input.usdCost > caps.maxGiftUsd) throw new CapExceededError("OVER_MAX_GIFT", `Gifts are limited to $${caps.maxGiftUsd} each`);
 
   const senderName = text("senderName", input.senderName, 60);
@@ -193,8 +238,9 @@ export async function createGift(db: Db, input: NewGift, caps: GiftCaps): Promis
 
     const { rows } = await c.query(
       `INSERT INTO gifts (id, status, sender_address, sender_name, recipient_name, message, ticker, issuer,
-         token_address, token_decimals, quoted_token_amount, usd_cost, fee_usd, quote_id, claim_code_hash, payment_expires_at, dry_run, payment_requirements, return_as)
-       VALUES ($1, 'AWAITING_PAYMENT', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+         token_address, token_decimals, quoted_token_amount, usd_cost, fee_usd, quote_id, claim_code_hash, payment_expires_at, dry_run, payment_requirements, return_as,
+         order_drop_pct, order_baseline, order_trigger, order_deadline, order_text)
+       VALUES ($1, 'AWAITING_PAYMENT', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
        RETURNING *`,
       [
         randomUUID(),
@@ -215,6 +261,11 @@ export async function createGift(db: Db, input: NewGift, caps: GiftCaps): Promis
         input.dryRun ?? false,
         input.paymentRequirements ? JSON.stringify(input.paymentRequirements) : null,
         input.returnAs === "usdt" ? "usdt" : "stock",
+        input.order?.dropPct ?? null,
+        input.order?.baseline ?? null,
+        input.order ? triggerPrice(input.order.baseline, input.order.dropPct) : null,
+        input.order?.deadline ?? null,
+        input.order?.text ? input.order.text.slice(0, 400) : null,
       ],
     );
     const gift = toGift(rows[0]);

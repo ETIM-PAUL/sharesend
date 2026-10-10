@@ -34,6 +34,8 @@ export interface PublicGift {
   returnAs: "stock" | "usdt";
   /** USDT the sender received after the stock was sold (when it was), else null. */
   returnedUsdt?: number | null;
+  /** A conditional order: buy only after a price drop, by a deadline. Null for an ordinary gift. */
+  order: null | { dropPct: number; baseline: number; trigger: number; deadline: string; text: string | null; triggered: boolean; lastPrice: number | null; checkedAt: string | null };
   txs: Partial<Record<"payment" | "buy" | "vault" | "claim" | "return" | "refund", string>>;
 }
 
@@ -121,7 +123,7 @@ export const agent = {
   },
 
   /** Creates the gift. The agent answers 402 Payment Required with what it accepts. */
-  async openGift(input: { ticker: string; usd: number; senderAddress: string; senderName: string; recipientName: string; message: string; returnAs?: "stock" | "usdt" }) {
+  async openGift(input: { ticker: string; usd: number; senderAddress: string; senderName: string; recipientName: string; message: string; returnAs?: "stock" | "usdt"; order?: { dropPct: number; deadline: string; text?: string } }) {
     const r = await call<{ gift: PublicGift; accepts: PaymentRequirement[]; resource: Draft["resource"]; error?: string }>(
       "/gifts",
       { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input) },
@@ -252,3 +254,30 @@ export interface AgentStatus {
 }
 
 export const agentStatus = () => call<AgentStatus>("/agent/status");
+
+// ---- Chat ("Tell the agent") ----
+
+export interface GiftDraft {
+  ticker: string;
+  companyName: string;
+  usd: number;
+  recipientName: string;
+  message: string;
+  returnAs: "stock" | "usdt";
+  order?: { dropPct: number; deadline: string };
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export const chatApi = {
+  enabled: () => call<{ enabled: boolean }>("/chat/status").then((r) => r.enabled).catch(() => false),
+  send: (messages: ChatMessage[], tz: string) =>
+    call<{ ok: true; reply: string; draft?: GiftDraft }>("/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ messages, tz }),
+    }),
+};

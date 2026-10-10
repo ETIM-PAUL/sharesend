@@ -1,54 +1,45 @@
 @import "tailwindcss";
 
-/* ShareSend: a share certificate that travels like a message.
-   Banknote paper, bottle-green ink, a gold seal used once (when a gift is paid). */
+/* ShareSend: a night ledger. Blue-black page, warm paper-white text, amber for money and actions,
+   teal only for "running" and gains. One theme: dark. */
 :root {
-  --paper: #edf2ee;
-  --sheet: #f8fbf9;
-  --ink: #13302a;
-  --ink-soft: #4f6a62;
-  --engrave: #2e6b57;
-  --rule: #c9d6cf;
-  --foil: #c59a3d;
-  --notice-bg: #f6ecd2;
-  --notice-ink: #6a4a05;
-  --error-bg: #f8e1dd;
-  --error-ink: #8b1f13;
-  --whatsapp: #1f8f4e;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper: #0f1d19;
-    --sheet: #152723;
-    --ink: #e4eee9;
-    --ink-soft: #9db5ac;
-    --engrave: #6fb79a;
-    --rule: #2a403a;
-    --foil: #d9b25e;
-    --notice-bg: #3a2f13;
-    --notice-ink: #f0d695;
-    --error-bg: #3c1c17;
-    --error-ink: #ffb3a7;
-    --whatsapp: #3fbf74;
-  }
+  color-scheme: dark;
+  --paper: #0e1218;
+  --sheet: #151b23;
+  --raise: #1b232d;
+  --ink: #e9e6dc;
+  --ink-soft: #8f9aa6;
+  --engrave: #f0b445;
+  --on-engrave: #1a1204;
+  --rule: #26303b;
+  --foil: #d9a441;
+  --signal: #4ed6b4;
+  --notice-bg: #2b2412;
+  --notice-ink: #f3d58a;
+  --error-bg: #3a1d1d;
+  --error-ink: #ffb1a6;
+  --whatsapp: #2fbf6b;
 }
 
 @theme inline {
   --color-paper: var(--paper);
   --color-sheet: var(--sheet);
+  --color-raise: var(--raise);
   --color-ink: var(--ink);
   --color-ink-soft: var(--ink-soft);
   --color-engrave: var(--engrave);
+  --color-on-engrave: var(--on-engrave);
   --color-rule: var(--rule);
   --color-foil: var(--foil);
+  --color-signal: var(--signal);
   --color-notice-bg: var(--notice-bg);
   --color-notice-ink: var(--notice-ink);
   --color-error-bg: var(--error-bg);
   --color-error-ink: var(--error-ink);
   --color-whatsapp: var(--whatsapp);
-  --font-sans: var(--font-figtree);
-  --font-display: var(--font-bodoni);
+  --font-sans: var(--font-hanken);
+  --font-display: var(--font-bricolage);
+  --font-mono: var(--font-jetbrains);
 }
 
 html {
@@ -58,8 +49,12 @@ html {
 body {
   background: var(--paper);
   color: var(--ink);
-  font-family: var(--font-figtree), system-ui, sans-serif;
+  font-family: var(--font-hanken), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--engrave) 35%, transparent);
 }
 
 :focus-visible {
@@ -67,29 +62,72 @@ body {
   outline-offset: 2px;
 }
 
-/* Engraved frame: two crossing line screens, like the border of a share certificate. */
+/* Headlines and money: Bricolage with lining, tabular figures. */
+.numerals {
+  font-family: var(--font-bricolage), system-ui, sans-serif;
+  font-variant-numeric: lining-nums tabular-nums;
+  font-optical-sizing: auto;
+}
+
+/* Real data only: hashes, ledger rows. */
+.ledger-mono {
+  font-family: var(--font-jetbrains), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The certificate: a fine engraved border (two crossing line screens) around a lit card. */
 .certificate {
   background:
-    repeating-linear-gradient(45deg, color-mix(in srgb, var(--engrave) 22%, transparent) 0 1px, transparent 1px 6px),
-    repeating-linear-gradient(-45deg, color-mix(in srgb, var(--engrave) 22%, transparent) 0 1px, transparent 1px 6px),
+    repeating-linear-gradient(45deg, color-mix(in srgb, var(--engrave) 26%, transparent) 0 1px, transparent 1px 6px),
+    repeating-linear-gradient(-45deg, color-mix(in srgb, var(--engrave) 26%, transparent) 0 1px, transparent 1px 6px),
     var(--sheet);
-  padding: 10px;
-  border-radius: 6px;
-  border: 1px solid color-mix(in srgb, var(--engrave) 45%, transparent);
+  padding: 9px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--engrave) 40%, transparent);
 }
 
 .certificate-inner {
-  background: var(--sheet);
-  border: 1px solid color-mix(in srgb, var(--engrave) 35%, transparent);
-  border-radius: 2px;
+  background: linear-gradient(180deg, var(--raise), var(--sheet));
+  border: 1px solid color-mix(in srgb, var(--engrave) 30%, transparent);
+  border-radius: 3px;
 }
 
-.numerals {
-  font-family: var(--font-bodoni), "Bodoni 72", Didot, serif;
-  font-variant-numeric: lining-nums;
+/* The agent's heartbeat: a ring that pulses outward from the status dot. */
+@keyframes beat {
+  0% { transform: scale(1); opacity: 0.7; }
+  70%, 100% { transform: scale(2.6); opacity: 0; }
+}
+.beat {
+  position: relative;
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--signal);
+}
+.beat::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--signal);
+  animation: beat 2.4s ease-out infinite;
+}
+.beat.off { background: var(--ink-soft); }
+.beat.off::after { display: none; }
+.beat.warn { background: var(--error-ink); }
+
+/* The one entrance: ledger rows are written in, once, in order. */
+@keyframes write-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.write-in {
+  animation: write-in 420ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(var(--i, 0) * 110ms + 150ms);
 }
 
-/* The one orchestrated moment: the seal is pressed when payment lands. */
+/* The seal is pressed when payment lands. */
 @keyframes press-seal {
   0% { transform: scale(1.6) rotate(-18deg); opacity: 0; }
   60% { transform: scale(0.94) rotate(-8deg); opacity: 1; }
@@ -97,8 +135,10 @@ body {
 }
 .seal {
   transform: rotate(-10deg);
-  animation: press-seal 520ms cubic-bezier(.2, .9, .3, 1.2) both;
+  animation: press-seal 520ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
 }
+
 @media (prefers-reduced-motion: reduce) {
-  .seal { animation: none; }
+  .seal, .write-in { animation: none; }
+  .beat::after { animation: none; }
 }

@@ -32,6 +32,8 @@ export interface ChainPort {
 export interface MarketPort {
   /** Trading API best-quote output in raw token units for `usd` USDT. */
   apiQuoteOut(toToken: string, usd: number): Promise<bigint>;
+  /** Current price per real share (USD) of `token`, from a Trading API quote for `usd`. Throws if it can't be quoted. */
+  pricePerShare(token: string, usd: number): Promise<number>;
   /** Trading API best-quote USDT output (raw units) for selling `rawAmount` of `fromToken`. */
   apiSellQuoteOut(fromToken: string, rawAmount: bigint): Promise<bigint>;
 }

@@ -2,13 +2,14 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { agent, type GiftStatus } from "@/lib/agent";
+import { agent } from "@/lib/agent";
 import { usd } from "@/lib/format";
 import { listSent } from "@/lib/sent";
 import { useHydrated } from "@/lib/useHydrated";
 import { Button } from "./ui";
 
-const LABEL: Partial<Record<GiftStatus, string>> = {
+const LABEL: Record<string, string> = {
+  WAITING_PRICE: "Waiting for the price",
   AWAITING_PAYMENT: "Not paid",
   PAID: "Queued",
   BUYING: "Buying",
@@ -26,14 +27,14 @@ const LABEL: Partial<Record<GiftStatus, string>> = {
 export function SentList() {
   const hydrated = useHydrated();
   const gifts = hydrated ? listSent() : null;
-  const [status, setStatus] = useState<Record<string, GiftStatus>>({});
+  const [status, setStatus] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!hydrated) return;
     listSent().forEach((g) =>
       agent
         .gift(g.id)
-        .then((x) => setStatus((s) => ({ ...s, [g.id]: x.status })))
+        .then((x) => setStatus((s) => ({ ...s, [g.id]: x.status === "PAID" && x.order && !x.order.triggered ? "WAITING_PRICE" : x.status })))
         .catch(() => {}),
     );
   }, [hydrated]);
@@ -45,7 +46,7 @@ export function SentList() {
       <div className="space-y-4">
         <h1 className="numerals text-3xl font-bold text-ink">Gifts you sent</h1>
         <p className="text-ink-soft">Gifts you send from this device show up here, so you can follow them and cancel if you need to.</p>
-        <Link href="/">
+        <Link href="/send">
           <Button>Send a gift</Button>
         </Link>
       </div>
@@ -66,7 +67,7 @@ export function SentList() {
               </div>
               <div className="text-right">
                 <p className="numerals text-ink">{usd(g.usd)}</p>
-                <p className="text-sm text-ink-soft">{status[g.id] ? LABEL[status[g.id]] : "…"}</p>
+                <p className="text-sm text-ink-soft">{status[g.id] ? LABEL[status[g.id]!] ?? status[g.id] : "…"}</p>
               </div>
             </Link>
           </li>

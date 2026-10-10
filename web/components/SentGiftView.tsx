@@ -133,20 +133,22 @@ function SenderActions({ gift, local, onChange }: { gift: PublicGift; local?: Se
             {gift.status === "READY"
               ? "The claim link stops working, and the gift goes back to you. Pick what you want back:"
               : gift.status === "PAID"
-                ? "You get your payment back in full. The claim link stops working."
+                ? gift.order && !gift.order.triggered
+                  ? "The order is removed and you get your payment back in full. The claim link stops working."
+                  : "You get your payment back in full. The claim link stops working."
                 : "This gift hasn't been paid, so nothing is charged."}
             <div className="mt-3 flex flex-wrap gap-2">
               {gift.status === "READY" ? (
                 <>
-                  <button className="rounded-full bg-error-ink px-4 py-2 text-sm font-semibold text-sheet" onClick={() => run("cancel-stock")} disabled={!!busy}>
+                  <button className="rounded-full bg-error-ink px-4 py-2 text-sm font-semibold text-paper" onClick={() => run("cancel-stock")} disabled={!!busy}>
                     Cancel, get the stock back
                   </button>
-                  <button className="rounded-full bg-error-ink px-4 py-2 text-sm font-semibold text-sheet" onClick={() => run("cancel-usdt")} disabled={!!busy}>
+                  <button className="rounded-full bg-error-ink px-4 py-2 text-sm font-semibold text-paper" onClick={() => run("cancel-usdt")} disabled={!!busy}>
                     Cancel, get USDT back
                   </button>
                 </>
               ) : (
-                <button className="rounded-full bg-error-ink px-4 py-2 text-sm font-semibold text-sheet" onClick={() => run("cancel")} disabled={!!busy}>
+                <button className="rounded-full bg-error-ink px-4 py-2 text-sm font-semibold text-paper" onClick={() => run("cancel")} disabled={!!busy}>
                   Cancel the gift
                 </button>
               )}
@@ -157,7 +159,7 @@ function SenderActions({ gift, local, onChange }: { gift: PublicGift; local?: Se
           </Notice>
         ) : (
           <button className="w-full py-2 text-sm text-error-ink underline underline-offset-4" onClick={() => setConfirmCancel(true)}>
-            Cancel this gift
+            {gift.status === "PAID" && gift.order && !gift.order.triggered ? "Cancel this order" : "Cancel this gift"}
           </button>
         )
       ) : null}

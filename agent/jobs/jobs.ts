@@ -36,6 +36,9 @@ async function advanceAll(db: Db, deps: JobDeps, giftIds: string[], stopOn: Exec
   return done;
 }
 
+/** "2026-10-12 19:16 UTC" */
+const utc = (iso: string) => new Date(iso).toISOString().slice(0, 16).replace("T", " ") + " UTC";
+
 const count = (o: Record<string, string>, status: string) => Object.values(o).filter((s) => s === status).length;
 
 export function buildJobs(deps: JobDeps): JobDef[] {
@@ -119,7 +122,8 @@ export function buildJobs(deps: JobDeps): JobDef[] {
     everyMs: 60_000,
     needsBaw: true,
     async run(db) {
-      const list = await ids(db, "SELECT id FROM gifts WHERE status IN ('PAID', 'BUYING') ORDER BY created_at LIMIT 5");
+      // Orders still waiting for their price belong to price-watch.
+      const list = await ids(db, "SELECT id FROM gifts WHERE status IN ('PAID', 'BUYING') AND (order_trigger IS NULL OR order_triggered_at IS NOT NULL) ORDER BY created_at LIMIT 5");
       if (!list.length) return { summary: "no paid gifts waiting" };
       // The Agentic Wallet handles one transaction at a time; stop as soon as it says wait.
       const r = await advanceAll(db, deps, list, ["QUEUED", "PENDING"]);
@@ -128,6 +132,28 @@ export function buildJobs(deps: JobDeps): JobDef[] {
       return {
         ok: !Object.values(r).some((s) => s.startsWith("error")),
         summary: queued ? `queued: the Agentic Wallet is signed out (${list.length} waiting)` : `${ready} bought, ${list.length - ready} in progress`,
+        detail: r,
+      };
+    },
+  };
+
+  const priceWatch: JobDef = {
+    name: "price-watch",
+    title: "Watches the price for orders waiting to buy, and refunds the ones that run out of time",
+    everyMs: 60_000,
+    async run(db) {
+      const list = await ids(
+        db,
+        "SELECT id FROM gifts WHERE status = 'PAID' AND order_trigger IS NOT NULL AND order_triggered_at IS NULL ORDER BY order_deadline LIMIT 50",
+      );
+      if (!list.length) return { summary: "no orders waiting for a price" };
+      const r = await advanceAll(db, deps, list);
+      const waiting = count(r, "WAITING");
+      const started = Object.values(r).filter((x) => ["READY", "QUEUED", "PENDING"].includes(x)).length;
+      const refunded = count(r, "FAILED");
+      return {
+        ok: !Object.values(r).some((x) => x.startsWith("error")),
+        summary: `${list.length} waiting order${list.length === 1 ? "" : "s"}: ${waiting} still waiting, ${started} bought, ${refunded} refunded after their deadline`,
         detail: r,
       };
     },
@@ -181,13 +207,13 @@ export function buildJobs(deps: JobDeps): JobDef[] {
       if (hoursLeft < 12 && prevHoursLeft >= 12)
         await notify(`ShareSend: the Agentic Wallet session ends ${new Date(s.sessionExpireTime).toUTCString()}. Sign in again before then (npm run cli -- admin signin).`);
       return {
-        summary: `signed in until ${new Date(s.sessionExpireTime).toISOString().replace(":00.000Z", "Z")}${extended === null ? "" : extended ? "; activity extended the inactivity timer" : "; this check did not extend the inactivity timer"}`,
+        summary: `signed in until ${utc(s.sessionExpireTime)}${extended === null ? "" : extended ? "; activity extended the inactivity timer" : "; this check did not extend the inactivity timer"}`,
         detail: { connected: true, sessionExpireTime: s.sessionExpireTime, inactiveSignOutTime: s.inactiveSignOutTime, activityExtended: extended, quotaLeft: s.quotaLeft, dailyLimit: s.dailyLimit },
       };
     },
   };
 
-  return [expireUnpaid, expiryReturns, resumePayouts, buyQueue, reconciliation, keepalive];
+  return [expireUnpaid, expiryReturns, resumePayouts, priceWatch, buyQueue, reconciliation, keepalive];
 }
 
 export type { JobResult };

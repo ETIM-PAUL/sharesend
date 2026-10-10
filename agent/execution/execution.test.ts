@@ -155,6 +155,12 @@ class FakeBackend implements VaultBackend {
 
 class FakeMarket implements MarketPort {
   out = QUOTED;
+  price = 230; // per share
+  priceThrows = false;
+  async pricePerShare() {
+    if (this.priceThrows) throw new Error("no quote");
+    return this.price;
+  }
   sellOut = parseUnits("5", 18);
   async apiSellQuoteOut() {
     return this.sellOut;
@@ -203,7 +209,7 @@ describe.skipIf(!url)("execution pipeline (Postgres + fakes)", () => {
     d = { db, wallet, chain, market, cfg, sleep, now, vault: createVault(db, backend, { waitMs: 1_000, pollMs: 100, sleep }) };
   });
 
-  async function paidGift(usdCost = 5) {
+  async function paidGift(usdCost = 5, order?: { dropPct: number; baseline: number; deadline: Date }) {
     const { gift, claimCode } = await createGift(
       db,
       {
@@ -218,6 +224,7 @@ describe.skipIf(!url)("execution pipeline (Postgres + fakes)", () => {
         usdCost,
         feeUsd: 0.1,
         paymentExpiresAt: new Date(Date.now() + 60_000),
+        order,
       },
       { maxGiftUsd: 20, dailyCapUsd: 1e9 },
     );
@@ -445,6 +452,76 @@ describe.skipIf(!url)("execution pipeline (Postgres + fakes)", () => {
       await Promise.allSettled(ids.map((g) => runBuy(d, g.id)));
       const nonces = (await db.query("SELECT nonce FROM exec_records WHERE kind = 'forward' AND gift_id = ANY($1)", [ids.map((g) => g.id)])).rows.map((r) => r.nonce);
       expect(new Set(nonces).size).toBe(3);
+    });
+  });
+
+  describe("conditional orders", () => {
+    const inHours = (h: number) => new Date(Date.now() + h * 3_600_000);
+    const pending = (id: string) => getGift(db, id).then((g) => g!);
+
+    it("waits while the price is above the trigger: nothing is bought, nothing moves", async () => {
+      const { id } = await paidGift(5, { dropPct: 0.5, baseline: 230, deadline: inHours(2) });
+      market.price = 230; // trigger is 228.85
+      expect(await runBuy(d, id)).toMatchObject({ status: "WAITING", reason: expect.stringContaining("$228.85") });
+      const g = await pending(id);
+      expect([g.status, g.order!.lastPrice, g.order!.triggeredAt]).toEqual(["PAID", 230, null]);
+      expect(backend.signed).toHaveLength(0);
+      expect(wallet.swapCalls).toBe(0);
+    });
+
+    it("buys once the price reaches the trigger, and the gift ends up READY", async () => {
+      const { id } = await paidGift(5, { dropPct: 0.5, baseline: 230, deadline: inHours(2) });
+      market.price = 228.8;
+      expect((await runBuy(d, id)).status).toBe("READY");
+      const g = await pending(id);
+      expect(g.status).toBe("READY");
+      expect(g.order!.triggeredAt).not.toBeNull();
+    });
+
+    it("refunds in full at the deadline when the price was never reached", async () => {
+      const { id } = await paidGift(5, { dropPct: 0.5, baseline: 230, deadline: inHours(2) });
+      expect((await runBuy(d, id)).status).toBe("WAITING");
+      await db.query("UPDATE gifts SET order_deadline = now() - interval '1 minute' WHERE id = $1", [id]);
+      const r = await runBuy(d, id);
+      expect(r).toMatchObject({ status: "FAILED", reason: expect.stringContaining("refunded") });
+      expect((await pending(id)).status).toBe("REFUNDING");
+      expect((await refundGift(d, id)).status).toBe("REFUNDED");
+      expect(backend.signed).toEqual([expect.objectContaining({ token: USDT, to: SENDER, amount: parseUnits("5.1", 18) })]);
+      expect(wallet.swapCalls).toBe(0);
+    });
+
+    it("an unreadable price doesn't buy, and still refunds at the deadline", async () => {
+      const { id } = await paidGift(5, { dropPct: 0.5, baseline: 230, deadline: inHours(2) });
+      market.priceThrows = true;
+      expect(await runBuy(d, id)).toMatchObject({ status: "WAITING" });
+      await db.query("UPDATE gifts SET order_deadline = now() - interval '1 minute' WHERE id = $1", [id]);
+      expect((await runBuy(d, id)).status).toBe("FAILED");
+    });
+
+    it("keeps its deadline while the trading wallet is signed out", async () => {
+      const { id } = await paidGift(5, { dropPct: 0.5, baseline: 230, deadline: inHours(2) });
+      wallet.connected = false;
+      expect((await runBuy(d, id)).status).toBe("WAITING"); // price check needs no wallet
+      await db.query("UPDATE gifts SET order_deadline = now() - interval '1 minute' WHERE id = $1", [id]);
+      expect((await runBuy(d, id)).status).toBe("FAILED"); // refund doesn't either
+    });
+
+    it("once triggered while signed out, it is queued, then bought after sign-in even past the deadline", async () => {
+      const { id } = await paidGift(5, { dropPct: 0.5, baseline: 230, deadline: inHours(2) });
+      market.price = 228;
+      wallet.connected = false;
+      expect(await runBuy(d, id)).toMatchObject({ status: "QUEUED" });
+      expect((await pending(id)).order!.triggeredAt).not.toBeNull();
+      await db.query("UPDATE gifts SET order_deadline = now() - interval '1 hour' WHERE id = $1", [id]);
+      wallet.connected = true;
+      market.price = 240; // price moved back up: it's already triggered
+      expect((await runBuy(d, id)).status).toBe("READY");
+    });
+
+    it("an ordinary gift ignores the price entirely", async () => {
+      const { id } = await paidGift(5);
+      market.price = 9999;
+      expect((await runBuy(d, id)).status).toBe("READY");
     });
   });
 
