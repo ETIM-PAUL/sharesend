@@ -23,7 +23,7 @@ app.use(
   cors({
     origin: webOrigins,
     allowMethods: ["GET", "POST", "OPTIONS"],
-    allowHeaders: ["content-type", "PAYMENT-SIGNATURE", "X-PAYMENT"],
+    allowHeaders: ["content-type", "authorization", "PAYMENT-SIGNATURE", "X-PAYMENT"],
     exposeHeaders: ["PAYMENT-REQUIRED", "PAYMENT-RESPONSE"],
     maxAge: 600,
   }),
