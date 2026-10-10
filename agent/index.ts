@@ -104,5 +104,10 @@ if (process.env.DATABASE_URL)
     })
     .catch((e) => console.error("migration failed:", e.message));
 
+// The `baw` CLI encrypts its saved session with a key derived from the machine's MAC address, which changes on every
+// container deploy. A constant BINANCE_INSTANCE_ID keeps the key (and the session) stable across redeploys.
+if (process.env.AUTO_EXECUTE === "true" && !process.env.BINANCE_INSTANCE_ID)
+  console.warn("WARNING: BINANCE_INSTANCE_ID is not set; the Agentic Wallet session will be lost on every redeploy.");
+
 const port = Number(process.env.PORT ?? 8080);
 serve({ fetch: app.fetch, port }, () => console.log(`sharesend-agent listening on :${port} (region ${region})`));

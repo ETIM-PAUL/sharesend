@@ -49,7 +49,9 @@ Sessions currently last 48 hours (`maxSigninDuration`), so signing in again need
 npm run cli -- admin signin https://sharesend-agent-production.up.railway.app
 ```
 
-The command prints a link and a pairing code. Open the link, check the code matches in the app, and confirm. The session lives in `/root/.baw`, so mount a Railway volume there, or every redeploy signs it out.
+The command prints a link and a pairing code. Open the link, check the code matches in the app, and confirm. Two settings keep the session across redeploys:
+- A Railway volume mounted at `/root/.baw` (where the session file lives).
+- `BINANCE_INSTANCE_ID` set to a constant (`openssl rand -hex 16`, kept private, never changed). The CLI encrypts its session with a key derived from the machine's MAC address, which changes on every container deploy; this variable replaces it. Sign in again after setting it.
 
 Sign-in schedule through judging (48-hour sessions): **Oct 11** (before the submission lock), 13, 15, 17, 19, 21 and 23. If the app allows a longer `maxSigninDuration`, raising it means fewer sign-ins. While signed out, paid gifts wait as "queued" in the vault. Claims, returns, refunds and reconciliation keep working.
 
