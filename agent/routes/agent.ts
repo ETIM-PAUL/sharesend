@@ -13,7 +13,7 @@ import { getScheduler } from "../jobs/instance.js";
 import { buildJobs } from "../jobs/jobs.js";
 import { advance } from "../execution/advance.js";
 import * as baw from "../baw/cli.js";
-import { explorerLinks, getIdentity, readIdentityOnChain, type IdentityNetwork } from "../identity/erc8004.js";
+import { explorerLinks, getIdentity, readIdentityOnChain, REGISTRY, type IdentityNetwork } from "../identity/erc8004.js";
 
 export const agentRoutes = new Hono();
 
@@ -24,8 +24,15 @@ async function identity() {
   if (identityCache && Date.now() - identityCache.at < IDENTITY_TTL_MS) return identityCache.value;
   const db = getDb();
   // Mainnet identity if registered, otherwise the testnet rehearsal.
+  // On a fresh database the registration isn't recorded locally; ERC8004_AGENT_ID (mainnet) points at it, and
+  // everything shown is read back from the registry anyway.
+  const pinned = Number(process.env.ERC8004_AGENT_ID);
   for (const network of ["bsc-mainnet", "bsc-testnet"] as IdentityNetwork[]) {
-    const id = await getIdentity(db, network);
+    const id =
+      (await getIdentity(db, network)) ??
+      (network === "bsc-mainnet" && Number.isInteger(pinned) && pinned > 0
+        ? { network, agentId: pinned, owner: process.env.IDENTITY_ADDRESS ?? "", registry: REGISTRY[network], registerTx: process.env.ERC8004_REGISTER_TX ?? "", agentUri: "" }
+        : null);
     if (!id) continue;
     const chain = await readIdentityOnChain(network, id.agentId).catch(() => null);
     const value = {
@@ -38,7 +45,7 @@ async function identity() {
       description: (chain?.card?.description as string | undefined) ?? null,
       services: (chain?.card?.services as unknown[] | undefined) ?? [],
       verifiedOnChain: !!chain,
-      links: explorerLinks(network, id.agentId, id.registerTx),
+      links: explorerLinks(network, id.agentId, id.registerTx || undefined),
     };
     identityCache = { at: Date.now(), value };
     return value;

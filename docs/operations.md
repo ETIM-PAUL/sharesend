@@ -7,7 +7,7 @@ ShareSend registers itself with the BNB Agent SDK (`@bnbagent/sdk`) in the canon
 | Network | Registry | Agent |
 |---|---|---|
 | BSC testnet (rehearsal) | `0x8004A818BFB912233c491871b3d84c89A494BD9e` | #2584 ([token](https://testnet.bscscan.com/nft/0x8004A818BFB912233c491871b3d84c89A494BD9e/2584), [tx](https://testnet.bscscan.com/tx/0x66cb11ebd9d76c278c84d5d6618e9276c63afd92fd0db7a6478b77e302c20a01)) |
-| BSC mainnet | `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` | not yet: needs approval |
+| BSC mainnet | `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` | **#370811** ([token](https://bscscan.com/nft/0x8004A169FB4a3325136EB29fA0ceB6D2e539a432/370811), [tx](https://bscscan.com/tx/0xa5d28e4f6935ea5ae4ad1f97df02be8553ba5af736d239dd1bb50b8bf9c0b7f5)), registered Oct 10 2026 |
 
 - **Owner:** a dedicated identity key (`IDENTITY_ADDRESS`). It holds no funds and is not the vault key.
 - **Payment address:** the profile's `payTo` metadata points at the gift vault, which is where B402 fees land.
