@@ -41,7 +41,9 @@ export function SendFlow() {
   const sender = senderInput ?? (hydrated ? getSenderName() : "");
   const setSender = (v: string) => setSenderInput(v);
   const [returnAs, setReturnAs] = useState<ReturnAs>("stock");
-  const [isGroup, setIsGroup] = useState(false);
+  // null until the sender picks; /send?group=1 (from the landing page) starts on "Friends chip in".
+  const [isGroupInput, setIsGroup] = useState<boolean | null>(null);
+  const isGroup = isGroupInput ?? (hydrated ? new URLSearchParams(window.location.search).has("group") : false);
   const [groupDays, setGroupDays] = useState(3);
   const [when, setWhen] = useState<When>(WHEN_NOW);
   const [orderText, setOrderText] = useState("");

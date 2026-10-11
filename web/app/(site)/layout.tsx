@@ -12,6 +12,9 @@ export default function SiteLayout({ children }: LayoutProps<"/">) {
           <a href="#how" className="hidden underline-offset-4 hover:text-ink hover:underline sm:inline">
             How it works
           </a>
+          <a href="#ways" className="hidden underline-offset-4 hover:text-ink hover:underline sm:inline">
+            Ways to give
+          </a>
           <a href="#trust" className="hidden underline-offset-4 hover:text-ink hover:underline sm:inline">
             Safeguards
           </a>

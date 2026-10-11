@@ -14,6 +14,27 @@ const STEPS = [
   },
 ];
 
+const WAYS = [
+  {
+    title: "Chip in together",
+    text: "Start a group gift for a graduation or a birthday and share the link. Friends each put in what they like and add a note. When it closes, the agent buys one gift with everything raised, and the notes travel with it. If it's cancelled or can't be bought, everyone gets their money back.",
+    href: "/send?group=1",
+    cta: "Start a group gift",
+  },
+  {
+    title: "Wait for a better price",
+    text: "Tell the agent in plain words: \u201cSend Ada $5 of Nvidia, but only if it drops 2% by Friday.\u201d It fills in the form, buys only if the price gets there, and refunds you in full if it doesn't.",
+    href: "/send",
+    cta: "Tell the agent",
+  },
+  {
+    title: "From your own agent",
+    text: "A payroll bot, a rewards app or another AI agent can send a gift without the website: it pays over x402 on BNB Chain and gets the claim link back to pass on.",
+    href: "/agents",
+    cta: "How agents send gifts",
+  },
+];
+
 const SAFEGUARDS = [
   { term: "Every payout is checked first", text: "Each transfer out of the vault is simulated against Binance's transaction checker before it's signed." },
   { term: "A step can't run twice", text: "Every move is recorded before it happens, so a crash or a retry can't buy, send or refund the same gift twice." },
@@ -31,6 +52,15 @@ const FAQ = [
   { q: "Where is this available?", a: "Tokenized US stocks aren't offered in the United States and some other countries. The person claiming confirms they're allowed to hold them." },
   { q: "What does it cost?", a: "The gift amount plus a 10 cent fee. From that fee the agent covers trading and network costs, a few cents per gift." },
   { q: "What if nobody claims it?", a: "After 30 days it goes back to you, or sooner if you cancel. You choose in advance whether you get the stock back or have it sold into USDT." },
+  {
+    q: "How does a group gift work?",
+    a: "You start it, pick the stock and how long to collect (up to 7 days), and share the link. Each friend pays their part with one signature and adds a note; together it can reach $20. At the closing time, or sooner if you close it, the agent buys one gift and you send the claim link. If it's cancelled or can't be bought, everyone is refunded to their own wallet. If it isn't claimed, it comes back to you.",
+  },
+  {
+    q: "Can they take dollars instead of shares?",
+    a: "If they really need cash, yes. The gift arrives as shares; on the claim page they can ask for dollars (USDT) instead, and the agent sells the shares and sends what they sold for, a little more or less than the value shown.",
+  },
+  { q: "Can my app or agent send gifts?", a: "Yes. Any agent with a wallet can pay ShareSend directly over x402 (Binance's B402) and get a claim link back. The steps are on the For agents page." },
 ];
 
 export default function Home() {
@@ -41,7 +71,7 @@ export default function Home() {
         <div>
           <h1 className="numerals text-[clamp(2.6rem,7.2vw,5.4rem)] font-bold leading-[0.98] tracking-tight text-ink">Send a slice of a real company.</h1>
           <p className="mt-6 max-w-[34rem] text-[1.1rem] leading-relaxed text-ink-soft">
-            Pick a stock and an amount. They get a link on WhatsApp and claim it with their email. An autonomous agent buys the stock, holds it safely, and sends back whatever isn&apos;t claimed.
+            Pick a stock and an amount, or let friends chip in. They get a link on WhatsApp and claim it with their email. An autonomous agent buys the stock, holds it safely, and sends back whatever isn&apos;t claimed.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <ButtonLink href="/send">Send a gift</ButtonLink>
@@ -78,6 +108,22 @@ export default function Home() {
         </div>
       </section>
 
+      {/* Ways to give */}
+      <section id="ways" className="scroll-mt-8 border-t border-rule py-16 lg:py-24">
+        <h2 className="numerals max-w-[40rem] text-4xl font-bold leading-tight tracking-tight text-ink sm:text-5xl">More ways to give</h2>
+        <div className="mt-10 grid gap-x-12 gap-y-10 sm:grid-cols-2 lg:grid-cols-3">
+          {WAYS.map((w) => (
+            <div key={w.title} className="border-t border-rule pt-5">
+              <h3 className="numerals text-2xl font-semibold text-ink">{w.title}</h3>
+              <p className="mt-2 max-w-[32rem] leading-relaxed text-ink-soft">{w.text}</p>
+              <a href={w.href} className="mt-3 inline-block text-[0.95rem] font-semibold text-engrave underline-offset-4 hover:underline">
+                {w.cta} →
+              </a>
+            </div>
+          ))}
+        </div>
+      </section>
+
       {/* Safeguards */}
       <section id="trust" className="scroll-mt-8 border-t border-rule py-16 lg:py-24">
         <div className="grid gap-10 lg:grid-cols-[0.8fr_1.2fr] lg:gap-20">
@@ -99,7 +145,7 @@ export default function Home() {
           <h2 className="numerals text-4xl font-bold leading-tight tracking-tight text-ink sm:text-5xl">An agent with a name on the chain</h2>
           <div>
             <p className="max-w-[34rem] text-lg leading-relaxed text-ink-soft">
-              ShareSend is registered on BNB Chain as agent #370811 (ERC-8004). The jobs in the ledger above run by themselves, around the clock: buying, returning, finishing interrupted payouts and checking its own books. Its fees pay for its running costs, and its page shows both sides.
+              ShareSend is registered on BNB Chain as agent #370811 (ERC-8004). The jobs in the ledger above run by themselves, around the clock: buying, closing group gifts, returning, finishing interrupted payouts and checking its own books. Its fees pay for its running costs, and its page shows both sides. Other agents can find it through that identity and send gifts through it.
             </p>
             <div className="mt-6 flex flex-wrap gap-3">
               <ButtonLink href="/agent" variant="quiet">
@@ -107,6 +153,9 @@ export default function Home() {
               </ButtonLink>
               <ButtonLink href="https://bscscan.com/nft/0x8004A169FB4a3325136EB29fA0ceB6D2e539a432/370811" variant="quiet" external>
                 Its identity on BscScan
+              </ButtonLink>
+              <ButtonLink href="/agents" variant="quiet">
+                Send from your agent
               </ButtonLink>
             </div>
           </div>

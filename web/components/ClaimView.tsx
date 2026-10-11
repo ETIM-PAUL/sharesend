@@ -266,25 +266,15 @@ function ClaimPanel({ id, code, data, onClaimed }: { id: string; code: string; d
         </label>
       )}
 
-      <fieldset>
-        <legend className="mb-2 text-sm font-medium text-ink">How do you want it?</legend>
-        <div className="space-y-2">
-          {(
-            [
-              ["stock", "The shares", `Keep your piece of ${data.stock?.companyName ?? g.ticker}. Its value moves with the share price.`],
-              ["usdt", "Dollars (USDT)", `We sell the shares and send you about ${g.valueNowUsd !== null ? usd(g.valueNowUsd) : "their value"} in USDT on BNB Chain: what they sell for, a little more or less. If they can't be sold right now, you get the shares instead.`],
-            ] as const
-          ).map(([value, label, hint]) => (
-            <label key={value} className={`flex cursor-pointer items-start gap-3 rounded-[10px] border px-3.5 py-3 ${claimAs === value ? "border-engrave bg-sheet" : "border-rule"}`}>
-              <input type="radio" name="claim-as" className="mt-1 accent-[var(--engrave)]" checked={claimAs === value} onChange={() => setClaimAs(value)} />
-              <span>
-                <span className="block text-[0.95rem] text-ink">{label}</span>
-                <span className="block text-xs text-ink-soft">{hint}</span>
-              </span>
-            </label>
-          ))}
-        </div>
-      </fieldset>
+      {claimAs === "usdt" ? (
+        <Notice>
+          You&apos;ll get dollars instead: we sell the shares and send you about {g.valueNowUsd !== null ? usd(g.valueNowUsd) : "their value"} in USDT on BNB Chain, what they sell for, a little more or less. If they can&apos;t be
+          sold right now, you get the shares.{" "}
+          <button type="button" className="underline underline-offset-4" onClick={() => setClaimAs("stock")}>
+            Keep the shares
+          </button>
+        </Notice>
+      ) : null}
 
       <label className="flex items-start gap-3 text-sm text-ink">
         <input type="checkbox" className="mt-1 h-4 w-4 accent-[var(--engrave)]" checked={eligible} onChange={(e) => setEligible(e.target.checked)} />
@@ -310,6 +300,11 @@ function ClaimPanel({ id, code, data, onClaimed }: { id: string; code: string; d
       <button className="w-full text-sm text-engrave underline underline-offset-4" onClick={() => setMode(mode === "email" ? "paste" : "email")}>
         {mode === "email" ? "I already have a BNB Chain wallet" : "Use my email instead"}
       </button>
+      {claimAs === "stock" ? (
+        <button type="button" className="w-full text-sm text-ink-soft underline underline-offset-4" onClick={() => setClaimAs("usdt")}>
+          Need cash? Take dollars instead
+        </button>
+      ) : null}
       {g.claimExpiresAt ? (
         <p className="text-xs text-ink-soft">
           Claim by {new Date(g.claimExpiresAt).toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" })}, or it goes back to {g.senderName}.
