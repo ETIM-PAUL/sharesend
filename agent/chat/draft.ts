@@ -1,7 +1,7 @@
 // The chat assistant only ever proposes a draft. This turns whatever the model produced into a validated draft the
 // send form can show, or a list of plain-language problems. Nothing here (or in the model) can spend money.
 import { MAX_ORDER_DAYS, MAX_ORDER_DROP_PCT } from "../gifts/ledger.js";
-import { MAX_GROUP_DAYS } from "../gifts/groups.js";
+import { MAX_GROUP_DAYS, MIN_GROUP_MINUTES } from "../gifts/groups.js";
 
 export interface Draft {
   ticker: string;
@@ -13,8 +13,8 @@ export interface Draft {
   returnAs: "stock" | "usdt";
   /** Present when the gift should only be bought after a price drop. */
   order?: { dropPct: number; deadline: string };
-  /** Present for a group gift: friends chip in for `days`, then one gift is bought with everything raised. */
-  group?: { days: number };
+  /** Present for a group gift: friends chip in for `minutes`, then one gift is bought with everything raised. */
+  group?: { minutes: number };
 }
 
 export type DraftResult = { ok: true; draft: Draft } | { ok: false; problems: string[] };
@@ -50,11 +50,13 @@ export async function validateDraft(raw: unknown, ctx: DraftContext): Promise<Dr
   const isGroup = r.group_gift === true;
   let group: Draft["group"];
   if (isGroup) {
-    const daysRaw = r.collect_days ?? 3;
-    const days = typeof daysRaw === "number" ? Math.round(daysRaw) : NaN;
-    if (!Number.isFinite(days) || days < 1) problems.push("How many days should friends have to chip in? From 1 to 7.");
-    else if (days > MAX_GROUP_DAYS) problems.push(`A group gift can collect for at most ${MAX_GROUP_DAYS} days. Shall I make it ${MAX_GROUP_DAYS}?`);
-    else group = { days };
+    // collect_minutes wins; collect_days is accepted too; 3 days if neither is given.
+    const raw = r.collect_minutes ?? (typeof r.collect_days === "number" ? r.collect_days * 1440 : 3 * 1440);
+    const minutes = typeof raw === "number" ? Math.round(raw) : NaN;
+    if (!Number.isFinite(minutes) || minutes <= 0) problems.push(`How long should friends have to chip in? From ${MIN_GROUP_MINUTES} minutes to ${MAX_GROUP_DAYS} days.`);
+    else if (minutes < MIN_GROUP_MINUTES) problems.push(`A group gift has to stay open for at least ${MIN_GROUP_MINUTES} minutes. Shall I make it ${MIN_GROUP_MINUTES}?`);
+    else if (minutes > MAX_GROUP_DAYS * 1440) problems.push(`A group gift can collect for at most ${MAX_GROUP_DAYS} days. Shall I make it ${MAX_GROUP_DAYS}?`);
+    else group = { minutes };
     if (r.buy_when_price_drops_pct !== undefined && r.buy_when_price_drops_pct !== null) problems.push("A group gift is bought when it closes, so it can't also wait for a price drop. Which would you like?");
   }
 
@@ -91,4 +93,10 @@ export async function validateDraft(raw: unknown, ctx: DraftContext): Promise<Dr
 
   if (problems.length || !stock || !Number.isFinite(usd)) return { ok: false, problems: problems.length ? problems : ["I couldn't make sense of that."] };
   return { ok: true, draft: { ticker: stock.ticker, companyName: stock.name, usd, recipientName, message, returnAs, ...(order ? { order } : {}), ...(group ? { group } : {}) } };
+}
+
+/** "5 minutes", "2 hours", "3 days" */
+export function duration(minutes: number): string {
+  const [n, unit] = minutes % 1440 === 0 ? [minutes / 1440, "day"] : minutes % 60 === 0 ? [minutes / 60, "hour"] : [minutes, "minute"];
+  return `${n} ${unit}${n === 1 ? "" : "s"}`;
 }

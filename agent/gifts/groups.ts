@@ -33,6 +33,8 @@ export interface Group {
 }
 
 export const MAX_GROUP_DAYS = 7;
+/** The shortest a group can collect for (a quick demo). Contributions hold their price for 5 minutes too. */
+export const MIN_GROUP_MINUTES = 5;
 /** An auto-close that can't get a price keeps trying this long past closes_at, then refunds everyone. */
 export const GROUP_CLOSE_GRACE_MS = 24 * 3_600_000;
 
@@ -78,7 +80,8 @@ export async function createGroup(db: Queryable, input: NewGroup): Promise<Group
   if (!isAddress(input.organizerAddress)) throw new Error("organizerAddress is not a valid address");
   if (!/^[A-Za-z.]{1,10}$/.test(input.ticker)) throw new Error("ticker required");
   const ms = input.closesAt.getTime() - Date.now();
-  if (!(ms >= 10 * 60_000)) throw new Error("the group must stay open for at least 10 minutes");
+  // A few seconds of slack: the browser computes closesAt just before the request arrives.
+  if (!(ms >= MIN_GROUP_MINUTES * 60_000 - 30_000)) throw new Error(`the group must stay open for at least ${MIN_GROUP_MINUTES} minutes`);
   if (ms > MAX_GROUP_DAYS * 86_400_000) throw new Error(`a group can stay open for at most ${MAX_GROUP_DAYS} days`);
   const { rows } = await db.query(
     `INSERT INTO gift_groups (id, status, organizer_address, organizer_name, recipient_name, message, ticker, closes_at, dry_run, company_name)

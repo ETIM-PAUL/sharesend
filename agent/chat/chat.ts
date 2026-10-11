@@ -1,6 +1,6 @@
 // "Tell the agent": a chat that turns plain English into a draft gift for the form. The model has one tool,
 // propose_gift, which can only return a draft. It can't pay, buy, sign or send; the sender reviews the form and pays.
-import { validateDraft, type Draft, type DraftContext } from "./draft.js";
+import { duration, validateDraft, type Draft, type DraftContext } from "./draft.js";
 
 export const PROPOSE_GIFT_TOOL = {
   name: "propose_gift",
@@ -17,7 +17,7 @@ export const PROPOSE_GIFT_TOOL = {
       buy_when_price_drops_pct: { type: "number", description: "Only buy once the price per share has fallen by this percentage from its price when the order is placed. Omit for an immediate gift." },
       buy_by: { type: "string", description: "Deadline for that price drop as ISO 8601 with the user's UTC offset, e.g. 2026-10-11T14:00:00+01:00. If the price isn't reached by then the user is refunded. Required with buy_when_price_drops_pct." },
       group_gift: { type: "boolean", description: "True for a group gift (a pot friends chip in to): each person pays what they like and adds a note, then one gift is bought with everything raised. Omit for a single gift." },
-      collect_days: { type: "number", description: "For a group gift: how many days friends can chip in before it's bought, 1 to 7. Default 3." },
+      collect_minutes: { type: "number", description: "For a group gift: how long friends can chip in before it's bought, in minutes, from 5 (5 minutes) to 10080 (7 days). Convert the user's words: 1 day = 1440. Default 4320 (3 days)." },
     },
     required: ["ticker", "recipient_name"],
   },
@@ -62,7 +62,7 @@ export function systemPrompt(now: number, tz: string, maxGiftUsd: number): strin
     "You are the ShareSend assistant. ShareSend lets someone gift a slice of a real company: tokenized US stocks on BNB Chain, claimed by the recipient with their email.",
     "Your only job is to help the user describe a gift. You cannot buy, send, pay, cancel or move anything. When the details are clear, call propose_gift; the user then reviews a form and pays themselves. Never say a gift has been sent or bought.",
     `Gifts run from $1 to $${maxGiftUsd}. The user can ask to buy only after a price drop (a percentage below the price when the order is placed) by a deadline within 7 days; if the price isn't reached, they are refunded in full.`,
-    `Group gifts ("a pot", "chip in", "everyone contributes") are supported: the user starts a group for one person and one stock, friends each pay what they like and add a note for 1 to 7 days, then ShareSend buys one gift with everything raised (up to $${maxGiftUsd} in total). For those, call propose_gift with group_gift true and collect_days; no amount is needed. If they ask for more than 7 days, say 7 is the most and offer 7.`,
+    `Group gifts ("a pot", "chip in", "everyone contributes") are supported: the user starts a group for one person and one stock, friends each pay what they like (at least $1 each) and add a note for anything from 5 minutes to 7 days, then ShareSend buys one gift with everything raised (up to $${maxGiftUsd} in total). For those, call propose_gift with group_gift true and collect_minutes; no amount is needed. If they ask for more than 7 days, say 7 days is the most and offer it.`,
     `The current time is ${local} (time zone ${tz}, UTC${offsetOf(tz, now)}). Give buy_by as ISO 8601 with that offset. Resolve "tomorrow", "Friday" and "2PM" yourself.`,
     "If something is missing (stock, amount for a single gift, who it's for, or a deadline when a price drop is requested), ask one short question. Keep every reply to one or two plain sentences. No investment advice, no predictions, no price opinions.",
     "A single gift bought at a set time without a price condition isn't supported yet: say so and offer a price-drop order, or a group gift (which is bought when it closes).",
@@ -105,7 +105,7 @@ export async function chatTurn(deps: ChatDeps, history: ChatMessage[], tzIn: unk
   const d = v.draft;
   if (d.group)
     return {
-      reply: `Here's the group gift: friends chip in for ${d.companyName} for ${d.recipientName} over ${d.group.days === 1 ? "1 day" : `${d.group.days} days`}, then one gift is bought with everything raised. Check the details below, add your name, and start it.`,
+      reply: `Here's the group gift: friends chip in for ${d.companyName} for ${d.recipientName} over ${duration(d.group.minutes)}, at least $1 each, then one gift is bought with everything raised. Check the details below, add your name, and start it.`,
       draft: d,
     };
   const when = d.order ? ` It will only be bought if ${d.ticker} falls ${d.order.dropPct}% by ${new Date(d.order.deadline).toLocaleString("en-US", { timeZone: tz, weekday: "short", hour: "numeric", minute: "2-digit" })}; otherwise you're refunded.` : "";

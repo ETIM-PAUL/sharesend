@@ -107,7 +107,7 @@ On the claim page the recipient picks **the shares** or **dollars (USDT)**. USDT
 
 ## Group gifts
 
-From `/send`, "Friends chip in" starts a group: the stock, the recipient, a note and how long to collect (1, 3 or 7 days). The organizer signs in (their wallet gets an unclaimed gift back) and shares the group page, `/g/<id>`.
+From `/send`, "Friends chip in" starts a group: the stock, the recipient, a note and how long to collect (5 minutes for a quick demo, or 1, 3 or 7 days; the chat accepts anything from 5 minutes to 7 days). The organizer signs in (their wallet gets an unclaimed gift back) and shares the group page, `/g/<id>`.
 
 - Each contribution is an ordinary gift row (`group_role = 'contribution'`), paid through B402 like any gift, with its own $0.10 fee. It is never bought on its own.
 - A group takes up to `MAX_GIFT_USD` in total; unpaid contributions hold their share while their price hold runs.

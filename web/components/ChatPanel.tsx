@@ -4,7 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import { chatApi, type ChatMessage, type GiftDraft } from "@/lib/agent";
 import { Button, Input, Notice } from "./ui";
 
-const EXAMPLES = ["Send Ada $5 of Nvidia, but only if it drops 0.5% by tomorrow 2PM", "$10 of the S&P 500 for my brother Tunde, happy birthday"];
+const EXAMPLES = [
+  "Send Ada $5 of Nvidia, but only if it drops 0.5% by tomorrow 2PM",
+  "Start a pot for our friend Tobi's 18th birthday: friends chip in at least $1 each for Nvidia, closing in 5 minutes",
+  "$10 of the S&P 500 for my brother Tunde, happy birthday",
+];
 
 /**
  * "Tell the agent": plain English in, a draft gift out. The assistant can only fill in the form below; you check it,

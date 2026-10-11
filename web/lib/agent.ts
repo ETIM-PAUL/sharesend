@@ -284,8 +284,8 @@ export interface GiftDraft {
   message: string;
   returnAs: "stock" | "usdt";
   order?: { dropPct: number; deadline: string };
-  /** A group gift: friends chip in for this many days. */
-  group?: { days: number };
+  /** A group gift: friends chip in for this many minutes. */
+  group?: { minutes: number };
 }
 
 export interface ChatMessage {

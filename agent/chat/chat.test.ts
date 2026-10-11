@@ -28,10 +28,12 @@ describe("validateDraft", () => {
   });
 
   it("accepts a group gift with no amount, and keeps it to 1–7 days with no price condition", async () => {
-    const r = await validateDraft({ ticker: "NVDA", recipient_name: "Joe", message: "Happy anniversary", group_gift: true, collect_days: 5 }, ctx);
-    expect(r).toEqual({ ok: true, draft: { ticker: "NVDA", companyName: "Nvidia Corp", usd: 0, recipientName: "Joe", message: "Happy anniversary", returnAs: "stock", group: { days: 5 } } });
-    expect(await validateDraft({ ticker: "NVDA", recipient_name: "Joe", group_gift: true }, ctx)).toMatchObject({ ok: true, draft: { group: { days: 3 } } });
-    expect(await validateDraft({ ticker: "NVDA", recipient_name: "Joe", group_gift: true, collect_days: 10 }, ctx)).toEqual({
+    const r = await validateDraft({ ticker: "NVDA", recipient_name: "Joe", message: "Happy anniversary", group_gift: true, collect_minutes: 5 }, ctx);
+    expect(r).toEqual({ ok: true, draft: { ticker: "NVDA", companyName: "Nvidia Corp", usd: 0, recipientName: "Joe", message: "Happy anniversary", returnAs: "stock", group: { minutes: 5 } } });
+    expect(await validateDraft({ ticker: "NVDA", recipient_name: "Joe", group_gift: true }, ctx)).toMatchObject({ ok: true, draft: { group: { minutes: 4320 } } });
+    expect(await validateDraft({ ticker: "NVDA", recipient_name: "Joe", group_gift: true, collect_days: 2 }, ctx)).toMatchObject({ ok: true, draft: { group: { minutes: 2880 } } });
+    expect(await validateDraft({ ticker: "NVDA", recipient_name: "Joe", group_gift: true, collect_minutes: 2 }, ctx)).toMatchObject({ ok: false, problems: [expect.stringMatching(/at least 5 minutes/)] });
+    expect(await validateDraft({ ticker: "NVDA", recipient_name: "Joe", group_gift: true, collect_minutes: 10 * 1440 }, ctx)).toEqual({
       ok: false,
       problems: ["A group gift can collect for at most 7 days. Shall I make it 7?"],
     });

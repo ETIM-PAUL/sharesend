@@ -27,7 +27,13 @@ const Narrow = ({ children }: { children: React.ReactNode }) => <div className="
 type Stage = "details" | "quote" | "pay" | "sent" | "group";
 
 /** How long a group gift collects before the agent buys it. */
-const GROUP_DAYS = [1, 3, 7];
+const GROUP_MINUTES = [5, 1440, 3 * 1440, 7 * 1440];
+
+/** "5 minutes", "2 hours", "3 days" */
+function duration(minutes: number): string {
+  const [n, unit] = minutes % 1440 === 0 ? [minutes / 1440, "day"] : minutes % 60 === 0 ? [minutes / 60, "hour"] : [minutes, "minute"];
+  return `${n} ${unit}${n === 1 ? "" : "s"}`;
+}
 
 export function SendFlow() {
   const [stage, setStage] = useState<Stage>("details");
@@ -44,7 +50,7 @@ export function SendFlow() {
   // null until the sender picks; /send?group=1 (from the landing page) starts on "Friends chip in".
   const [isGroupInput, setIsGroup] = useState<boolean | null>(null);
   const isGroup = isGroupInput ?? (hydrated ? new URLSearchParams(window.location.search).has("group") : false);
-  const [groupDays, setGroupDays] = useState(3);
+  const [groupMinutes, setGroupMinutes] = useState(3 * 1440);
   const [when, setWhen] = useState<When>(WHEN_NOW);
   const [orderText, setOrderText] = useState("");
   const formRef = useRef<HTMLFormElement>(null);
@@ -72,7 +78,7 @@ export function SendFlow() {
   function applyDraft(d: GiftDraft, text: string) {
     setStock({ ticker: d.ticker, name: d.companyName });
     setIsGroup(!!d.group);
-    if (d.group) setGroupDays(d.group.days);
+    if (d.group) setGroupMinutes(d.group.minutes);
     else setAmount(String(d.usd));
     setRecipient(d.recipientName);
     setMessage(d.message);
@@ -178,16 +184,16 @@ export function SendFlow() {
           <StockPicker value={stock} onChange={setStock} />
 
           {isGroup ? (
-          <Field label="Collect for" hint="Then the agent buys the gift with everything raised (up to $20). You can close it sooner.">
-            <div className="flex gap-2">
-              {[...new Set([...GROUP_DAYS, groupDays])].sort((a, b) => a - b).map((d) => (
+          <Field label="Collect for" hint="Then the agent buys the gift with everything raised (up to $20, at least $1 from each friend). You can close it sooner. 5 minutes is handy for a quick demo.">
+            <div className="flex flex-wrap gap-2">
+              {[...new Set([...GROUP_MINUTES, groupMinutes])].sort((a, b) => a - b).map((d) => (
                 <button
                   key={d}
                   type="button"
-                  onClick={() => setGroupDays(d)}
-                  className={`rounded-full border px-4 py-2 ${groupDays === d ? "border-engrave bg-engrave text-on-engrave" : "border-rule bg-sheet text-ink"}`}
+                  onClick={() => setGroupMinutes(d)}
+                  className={`rounded-full border px-4 py-2 ${groupMinutes === d ? "border-engrave bg-engrave text-on-engrave" : "border-rule bg-sheet text-ink"}`}
                 >
-                  {d === 1 ? "1 day" : `${d} days`}
+                  {duration(d)}
                 </button>
               ))}
             </div>
@@ -238,7 +244,7 @@ export function SendFlow() {
   if (stage === "group" && stock)
     return (
       <Narrow>
-        <GroupStart ticker={stock.ticker} companyName={stock.name} recipient={recipient.trim()} sender={sender.trim()} message={message.trim()} days={groupDays} onBack={() => setStage("details")} />
+        <GroupStart ticker={stock.ticker} companyName={stock.name} recipient={recipient.trim()} sender={sender.trim()} message={message.trim()} minutes={groupMinutes} onBack={() => setStage("details")} />
       </Narrow>
     );
 
@@ -374,7 +380,7 @@ function SentStage({ quote, paid, recipient, sender, message }: { quote: GiftQuo
 }
 
 /** Signs the organizer in (their wallet gets any unclaimed gift back), creates the group and opens its page. */
-function GroupStart(p: { ticker: string; companyName: string; recipient: string; sender: string; message: string; days: number; onBack: () => void }) {
+function GroupStart(p: { ticker: string; companyName: string; recipient: string; sender: string; message: string; minutes: number; onBack: () => void }) {
   const { ready, authenticated, login } = usePrivy();
   const { wallets, ready: walletsReady } = useWallets();
   const router = useRouter();
@@ -393,7 +399,7 @@ function GroupStart(p: { ticker: string; companyName: string; recipient: string;
         organizerName: p.sender,
         recipientName: p.recipient,
         message: p.message,
-        closesAt: new Date(Date.now() + p.days * 86_400_000).toISOString(),
+        closesAt: new Date(Date.now() + p.minutes * 60_000).toISOString(),
       });
       router.push(`/g/${g.id}`);
     } catch (e) {
@@ -406,7 +412,7 @@ function GroupStart(p: { ticker: string; companyName: string; recipient: string;
     <div className="space-y-5">
       <h1 className="numerals text-[1.8rem] font-bold leading-tight text-ink">A group gift of {p.companyName} for {p.recipient}</h1>
       <p className="text-[0.95rem] text-ink">
-        You&apos;ll get a link to share with friends. Each of you chips in what you like (you too) and adds a note. In {p.days === 1 ? "1 day" : `${p.days} days`}, or sooner if you close it, the agent buys one gift with everything raised, and you send {p.recipient} the claim link.
+        You&apos;ll get a link to share with friends. Each of you chips in what you like (you too) and adds a note. In {duration(p.minutes)}, or sooner if you close it, the agent buys one gift with everything raised, and you send {p.recipient} the claim link.
       </p>
       {!ready ? (
         <p className="text-sm text-ink-soft">Loading…</p>
