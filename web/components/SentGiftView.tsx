@@ -37,6 +37,15 @@ export function SentGiftView() {
           For {gift.recipientName}
           {local ? `, sent ${new Date(local.sentAt).toLocaleDateString(undefined, { day: "numeric", month: "long" })}` : ""}
         </p>
+        {gift.channel === "agent" ? (
+          <p className="mt-2 text-sm text-ink-soft">
+            <span className="mr-1.5 inline-block rounded-full border border-engrave px-2 py-0.5 text-xs font-medium text-engrave">Sent by an agent</span>
+            Paid directly over x402.{" "}
+            <Link href="/agents" className="underline underline-offset-4">
+              How it works
+            </Link>
+          </p>
+        ) : null}
       </div>
       <GiftProgress gift={gift} />
       <SenderActions gift={gift} local={local} onChange={setGift} />

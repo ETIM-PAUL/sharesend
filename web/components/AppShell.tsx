@@ -23,9 +23,12 @@ export function AppShell({ children, wide = false }: { children: React.ReactNode
         </nav>
       </header>
       <main className="flex-1">{children}</main>
-      <footer className="mt-12 border-t border-rule pt-4 text-sm text-ink-soft">
+      <footer className="mt-12 flex gap-5 border-t border-rule pt-4 text-sm text-ink-soft">
         <Link href="/agent" className="underline-offset-4 hover:text-ink hover:underline">
           How ShareSend runs
+        </Link>
+        <Link href="/agents" className="underline-offset-4 hover:text-ink hover:underline">
+          For agents
         </Link>
       </footer>
     </div>

@@ -33,6 +33,9 @@ export default function SiteLayout({ children }: LayoutProps<"/">) {
           <Link href="/agent" className="underline-offset-4 hover:text-ink hover:underline">
             The agent
           </Link>
+          <Link href="/agents" className="underline-offset-4 hover:text-ink hover:underline">
+            For agents
+          </Link>
           <Link href="/you" className="underline-offset-4 hover:text-ink hover:underline">
             Your stock
           </Link>

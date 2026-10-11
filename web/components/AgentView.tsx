@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { AGENT_URL, agentStatus, type AgentStatus } from "@/lib/agent";
 import { ago, shortAddr, usd } from "@/lib/format";
 import { Notice } from "./ui";
@@ -135,6 +136,9 @@ export function AgentView() {
           </p>
         ) : null}
         <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-sm">
+          <Link className="text-engrave underline underline-offset-4" href="/agents">
+            Send from your agent
+          </Link>
           <a className="text-engrave underline underline-offset-4" href={`${AGENT_URL}/skill.md`} target="_blank" rel="noopener noreferrer">
             How to call it (skill)
           </a>

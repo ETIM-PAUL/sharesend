@@ -18,7 +18,7 @@ describe("openaiLlm", () => {
     expect(Object.keys(body).sort()).toEqual(["input", "instructions", "model", "store", "tool_choice", "tools"]);
     expect(body).toMatchObject({ model: "gpt-6-luna", instructions: "SYSTEM", store: false, tool_choice: "auto", input: [{ role: "user", content: "send Ada $5 of nvidia" }] });
     expect(body.tools[0]).toMatchObject({ type: "function", name: "propose_gift", strict: false });
-    expect(body.tools[0].parameters.required).toEqual(["ticker", "usd", "recipient_name"]);
+    expect(body.tools[0].parameters.required).toEqual(["ticker", "recipient_name"]);
   });
 
   it("reads a function call and parses its JSON-string arguments", async () => {

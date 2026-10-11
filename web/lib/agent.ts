@@ -213,6 +213,8 @@ export interface ClaimViewData {
     payoutNote: string | null;
     /** A group gift: everyone who chipped in. */
     contributors: { name: string; note: string; usd: number; at: string }[];
+    /** "agent" when another agent paid for it over x402. */
+    channel?: "web" | "agent";
     dryRun: boolean;
   };
   stock: StockCard | null;
@@ -282,6 +284,8 @@ export interface GiftDraft {
   message: string;
   returnAs: "stock" | "usdt";
   order?: { dropPct: number; deadline: string };
+  /** A group gift: friends chip in for this many days. */
+  group?: { days: number };
 }
 
 export interface ChatMessage {

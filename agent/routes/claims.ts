@@ -109,6 +109,8 @@ claims.post("/claims/:id/view", async (c) => {
       payoutNote: g.status === "CLAIMED" && g.claimAs === "usdt" ? g.failureReason : null,
       // A group gift: everyone who chipped in (names and notes only).
       contributors,
+      // "agent" when another agent paid for it over x402.
+      channel: g.channel,
       dryRun: g.dryRun,
     },
     stock: stockCard(info),

@@ -1,16 +1,20 @@
 // The chat assistant only ever proposes a draft. This turns whatever the model produced into a validated draft the
 // send form can show, or a list of plain-language problems. Nothing here (or in the model) can spend money.
 import { MAX_ORDER_DAYS, MAX_ORDER_DROP_PCT } from "../gifts/ledger.js";
+import { MAX_GROUP_DAYS } from "../gifts/groups.js";
 
 export interface Draft {
   ticker: string;
   companyName: string;
+  /** The gift amount. 0 for a group gift: friends decide what they chip in. */
   usd: number;
   recipientName: string;
   message: string;
   returnAs: "stock" | "usdt";
   /** Present when the gift should only be bought after a price drop. */
   order?: { dropPct: number; deadline: string };
+  /** Present for a group gift: friends chip in for `days`, then one gift is bought with everything raised. */
+  group?: { days: number };
 }
 
 export type DraftResult = { ok: true; draft: Draft } | { ok: false; problems: string[] };
@@ -42,8 +46,22 @@ export async function validateDraft(raw: unknown, ctx: DraftContext): Promise<Dr
     }
   }
 
-  const usd = typeof r.usd === "number" ? Math.round(r.usd * 100) / 100 : NaN;
-  if (!Number.isFinite(usd)) problems.push("How many dollars?");
+  // A group gift has no amount up front: everyone chips in what they like, up to the cap in total.
+  const isGroup = r.group_gift === true;
+  let group: Draft["group"];
+  if (isGroup) {
+    const daysRaw = r.collect_days ?? 3;
+    const days = typeof daysRaw === "number" ? Math.round(daysRaw) : NaN;
+    if (!Number.isFinite(days) || days < 1) problems.push("How many days should friends have to chip in? From 1 to 7.");
+    else if (days > MAX_GROUP_DAYS) problems.push(`A group gift can collect for at most ${MAX_GROUP_DAYS} days. Shall I make it ${MAX_GROUP_DAYS}?`);
+    else group = { days };
+    if (r.buy_when_price_drops_pct !== undefined && r.buy_when_price_drops_pct !== null) problems.push("A group gift is bought when it closes, so it can't also wait for a price drop. Which would you like?");
+  }
+
+  const usd = isGroup ? 0 : typeof r.usd === "number" ? Math.round(r.usd * 100) / 100 : NaN;
+  if (isGroup) {
+    // no amount
+  } else if (!Number.isFinite(usd)) problems.push("How many dollars?");
   else if (usd < 1) problems.push("The smallest gift is $1.");
   else if (usd > ctx.maxGiftUsd) problems.push(`Gifts are limited to ${money(ctx.maxGiftUsd)} each.`);
 
@@ -53,8 +71,8 @@ export async function validateDraft(raw: unknown, ctx: DraftContext): Promise<Dr
   const returnAs = r.return_as === "usdt" ? "usdt" : "stock";
 
   let order: Draft["order"];
-  const dropRaw = r.buy_when_price_drops_pct;
-  const byRaw = str(r.buy_by, 40);
+  const dropRaw = isGroup ? undefined : r.buy_when_price_drops_pct;
+  const byRaw = isGroup ? "" : str(r.buy_by, 40);
   if (dropRaw !== undefined && dropRaw !== null) {
     const drop = typeof dropRaw === "number" ? Math.round(dropRaw * 1000) / 1000 : NaN;
     if (!Number.isFinite(drop) || drop <= 0 || drop > MAX_ORDER_DROP_PCT) problems.push(`The price drop has to be more than 0% and at most ${MAX_ORDER_DROP_PCT}%.`);
@@ -72,5 +90,5 @@ export async function validateDraft(raw: unknown, ctx: DraftContext): Promise<Dr
   }
 
   if (problems.length || !stock || !Number.isFinite(usd)) return { ok: false, problems: problems.length ? problems : ["I couldn't make sense of that."] };
-  return { ok: true, draft: { ticker: stock.ticker, companyName: stock.name, usd, recipientName, message, returnAs, ...(order ? { order } : {}) } };
+  return { ok: true, draft: { ticker: stock.ticker, companyName: stock.name, usd, recipientName, message, returnAs, ...(order ? { order } : {}), ...(group ? { group } : {}) } };
 }

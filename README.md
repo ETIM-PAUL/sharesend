@@ -23,6 +23,9 @@ Sending money home is easy. Giving someone their first share of Nvidia is nearly
 1. **Send.** The sender picks a stock and an amount ("$5 of Nvidia for Ada, happy birthday"). ShareSend compares the issuers, shows a price, takes payment with **one signature**, buys the stock, and returns a claim link to share on WhatsApp. They can also describe the gift in plain English ("only if it drops 0.5% by tomorrow 2PM"); an assistant fills in the form, and the sender still checks and pays.
 2. **Claim.** The recipient opens the link on their phone, sees what they received (company profile, value when sent and now), signs in with their **email**, and the shares land in a wallet made for them. No seed phrase, no gas, no exchange.
 3. **Return.** Unclaimed gifts go back to the sender after 30 days, or sooner if they cancel, either as the stock or **sold into USDT**, the sender's choice. A gift that can't be bought is refunded in full.
+4. **Shares or dollars.** When claiming, the recipient chooses: keep the shares, or have them sold and get USDT instead. If they can't be sold at that moment, the recipient gets the shares.
+5. **Group gifts.** Friends chip in to one gift (a graduation, a birthday). Each pays their share with one signature and adds a note; at the closing time the agent buys one gift with everything raised, and the recipient sees a note from each person. If it's cancelled or can't be bought, everyone is refunded to their own wallet.
+6. **Gifts from other agents.** Any agent with a wallet can send a gift without the web app: it pays the same endpoint over x402 (B402) and gets the claim link back. The endpoint is listed in ShareSend's on-chain identity; the steps are at [`/agents`](https://sharesend-production.up.railway.app/agents).
 
 ## How it works
 
@@ -89,7 +92,7 @@ Agentic Wallet sessions last 48 hours and re-signing needs a phone. A keepalive 
 
 ## Autonomous agent
 
-Registered on-chain as ERC-8004 agent #370811. Seven jobs run by themselves on the agent service and report to `/agent`: close unpaid gifts, return unclaimed ones, finish interrupted payouts, watch prices for waiting orders (and refund the ones that run out of time), buy for paid gifts, check the vault's holdings, and keep the trading wallet's session alive. Fees from gifts are recorded in a self-funding ledger next to what the agent spends.
+Registered on-chain as ERC-8004 agent #370811. Eight jobs run by themselves on the agent service and report to `/agent`: close unpaid gifts, return unclaimed ones, finish interrupted payouts, watch prices for waiting orders (and refund the ones that run out of time), buy for paid gifts, close group gifts (buy or refund), check the vault's holdings, and keep the trading wallet's session alive. Fees from gifts are recorded in a self-funding ledger next to what the agent spends.
 
 ## What's proven on mainnet
 
@@ -99,7 +102,7 @@ With real $1 gifts of NVDAB, every transaction linked in [`docs/demo-proof.md`](
 - A gift cancelled with **return as USDT**: bought, sold back and USDT returned to the sender.
 - A **failed purchase refunded** in full.
 
-Covered by automated tests but not exercised with real funds: conditional price orders, the wallet send page, and claiming while the trading wallet is signed out.
+Covered by automated tests but not exercised with real funds: conditional price orders, the wallet send page, claiming while the trading wallet is signed out, claiming as USDT, group gifts, and gifts paid by other agents.
 
 ## Network and hosting
 
@@ -123,7 +126,8 @@ Covered by automated tests but not exercised with real funds: conditional price 
 1. **See the agent working:** open [`/agent`](https://sharesend-production.up.railway.app/agent). The identity is read back from the chain, and each job shows its last run.
 2. **Claim a gift:** use one of the claim links in the submission form. Open it on a phone, sign in with an email, tick the eligibility box and claim. Tokenized US stocks aren't offered in the United States and some other countries; you confirm you're allowed to hold them.
 3. **Check the money:** every payment, purchase, claim, return and refund is on BscScan in [`docs/demo-proof.md`](docs/demo-proof.md).
-4. **Send one yourself** at [`/send`](https://sharesend-production.up.railway.app/send): needs a wallet with a few dollars of USDT, USDC, U or USD1 on BNB Chain.
+4. **Send one yourself** at [`/send`](https://sharesend-production.up.railway.app/send): needs a wallet with a few dollars of USDT, USDC, U or USD1 on BNB Chain. Choose "Friends chip in" to start a group gift.
+5. **See how other agents send gifts** at [`/agents`](https://sharesend-production.up.railway.app/agents), with the machine-readable [skill file](https://sharesend-agent-production-aef4.up.railway.app/skill.md) and [agent card](https://sharesend-agent-production-aef4.up.railway.app/.well-known/agent-card.json).
 
 ## Run it yourself
 
@@ -154,6 +158,8 @@ docs/         issuers, operations, live proof, friction log
 - A non-custodial escrow contract with signature-based claims, instead of the custodial vault.
 - Contacts, and sending the claim link automatically over SMS or WhatsApp.
 - Remittance split: part cash, part into an index fund.
-- **Cash out for recipients:** first to USDT on the claim page (the sell-back that already works for senders, pointed at the recipient's wallet), then to Naira through a licensed off-ramp partner. The Naira step depends on partner onboarding, identity verification and local regulation, so it's a direction, not a commitment.
+- **No BNB needed, for anyone:** every user transaction gas-sponsored through Privy's gas sponsorship in production mode. Today a sender's first payment in USDT or USDC needs a one-time Permit2 approval paid in BNB, and moving shares out of an email wallet needs BNB too. With sponsorship, buying a gift, sending shares on and selling them later all work with no BNB in the wallet.
+- **Sell later:** convert shares already claimed into USDT from the wallet page. The recipient sends them back to ShareSend in one tap (gas-sponsored), and the agent sells them through the Agentic Wallet and pays the dollars to the same wallet, reusing the sell path that already runs for returns and cash-out at claim time.
+- **Cash out to Naira** through a licensed off-ramp partner. This depends on partner onboarding, identity verification and local regulation, so it's a direction, not a commitment.
 - Scheduled sends.
 - A Telegram interface.

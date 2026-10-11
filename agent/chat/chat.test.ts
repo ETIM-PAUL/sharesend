@@ -27,6 +27,18 @@ describe("validateDraft", () => {
     expect(r.ok && r.draft.order).toBeUndefined();
   });
 
+  it("accepts a group gift with no amount, and keeps it to 1–7 days with no price condition", async () => {
+    const r = await validateDraft({ ticker: "NVDA", recipient_name: "Joe", message: "Happy anniversary", group_gift: true, collect_days: 5 }, ctx);
+    expect(r).toEqual({ ok: true, draft: { ticker: "NVDA", companyName: "Nvidia Corp", usd: 0, recipientName: "Joe", message: "Happy anniversary", returnAs: "stock", group: { days: 5 } } });
+    expect(await validateDraft({ ticker: "NVDA", recipient_name: "Joe", group_gift: true }, ctx)).toMatchObject({ ok: true, draft: { group: { days: 3 } } });
+    expect(await validateDraft({ ticker: "NVDA", recipient_name: "Joe", group_gift: true, collect_days: 10 }, ctx)).toEqual({
+      ok: false,
+      problems: ["A group gift can collect for at most 7 days. Shall I make it 7?"],
+    });
+    const both = await validateDraft({ ticker: "NVDA", recipient_name: "Joe", group_gift: true, buy_when_price_drops_pct: 1, buy_by: "2026-10-11T14:00:00+01:00" }, ctx);
+    expect(both.ok).toBe(false);
+  });
+
   it("never lets a hallucinated stock through, and suggests real ones", async () => {
     const r = await validateDraft({ ...good, ticker: "NVIDIA" }, ctx);
     expect(r).toMatchObject({ ok: false, problems: [expect.stringContaining("couldn't find a tokenized stock called NVIDIA")] });

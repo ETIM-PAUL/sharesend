@@ -83,6 +83,7 @@ export function ClaimView() {
           ? `${names(g.contributors.map((c) => c.name))} chipped in to send you a piece of ${s?.companyName ?? g.ticker}.`
           : `${g.senderName} sent you a piece of ${s?.companyName ?? g.ticker}.`}
       </p>
+      {g.channel === "agent" ? <AgentBadge /> : null}
 
       <Certificate
         ticker={g.ticker}
@@ -105,6 +106,19 @@ export function ClaimView() {
       <Explainer data={data} />
       {g.dryRun ? <p className="text-xs text-ink-soft">Test gift: no real money or stock moves.</p> : null}
     </div>
+  );
+}
+
+/** A gift another agent paid for directly. */
+function AgentBadge() {
+  return (
+    <p className="-mt-3 text-sm text-ink-soft">
+      <span className="mr-1.5 inline-block rounded-full border border-engrave px-2 py-0.5 text-xs font-medium text-engrave">Sent by an agent</span>
+      An AI agent bought this for you and paid over x402. It&apos;s yours to claim like any gift.{" "}
+      <Link href="/agents" className="underline underline-offset-4">
+        How
+      </Link>
+    </p>
   );
 }
 

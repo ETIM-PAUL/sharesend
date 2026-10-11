@@ -69,7 +69,9 @@ export function SendFlow() {
   /** A chat draft fills in the form. Nothing is sent or bought until you've checked it and paid. */
   function applyDraft(d: GiftDraft, text: string) {
     setStock({ ticker: d.ticker, name: d.companyName });
-    setAmount(String(d.usd));
+    setIsGroup(!!d.group);
+    if (d.group) setGroupDays(d.group.days);
+    else setAmount(String(d.usd));
     setRecipient(d.recipientName);
     setMessage(d.message);
     setReturnAs(d.returnAs);
@@ -176,7 +178,7 @@ export function SendFlow() {
           {isGroup ? (
           <Field label="Collect for" hint="Then the agent buys the gift with everything raised (up to $20). You can close it sooner.">
             <div className="flex gap-2">
-              {GROUP_DAYS.map((d) => (
+              {[...new Set([...GROUP_DAYS, groupDays])].sort((a, b) => a - b).map((d) => (
                 <button
                   key={d}
                   type="button"
