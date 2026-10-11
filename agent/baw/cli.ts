@@ -15,7 +15,8 @@ export class BawError extends Error {
   }
   /** Not signed in / session ended: callers queue work instead of failing it. */
   get isSessionError(): boolean {
-    return /UNCONNECTED|not (signed|logged) in|sign ?in|session/i.test(`${this.name_ ?? ""} ${this.message}`);
+    // Seen: NOT_LOGGED_IN "Not logged in", and "Please log in first." once a session has ended.
+    return /UNCONNECTED|NOT_LOGGED_IN|not (signed|logged) in|(sign|log) ?in|session/i.test(`${this.name_ ?? ""} ${this.message}`);
   }
 }
 

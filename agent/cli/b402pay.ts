@@ -23,6 +23,9 @@ export async function b402PayCommand(args: string[]): Promise<void> {
     return i >= 0 ? args[i + 1] : undefined;
   };
   const token = opt("--token")?.toUpperCase();
+  // BINANCE_INSTANCE_ID in .env is the hosted service's session key. Passed on to this machine's `baw`, it can't
+  // decrypt the session from a plain `baw auth signin` and signs it out, so use this machine's own key.
+  delete process.env.BINANCE_INSTANCE_ID;
   const sender = process.env.AGENTIC_WALLET_ADDRESS;
   if (!sender) throw new Error("Missing env var AGENTIC_WALLET_ADDRESS");
 

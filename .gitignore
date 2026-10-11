@@ -11,3 +11,5 @@ out/
 cache/
 BUILD_PLAN.md
 .agents/
+*mp4
+*mov
