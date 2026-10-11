@@ -5,7 +5,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { getAddress, parseUnits } from "viem";
 import type { Db } from "../db/pool.js";
 import { freshTestDb } from "../db/testDb.js";
-import { beginClaim, createGift, getGift, setReturnAs, transition } from "../gifts/ledger.js";
+import { beginClaim, createGift, getGift, giftsClaimedBy, setReturnAs, transition } from "../gifts/ledger.js";
+import { cancelGroup, closeGroup, createGroup, strandedContributions, type PoolQuote } from "../gifts/groups.js";
 import { runBuy, type ExecConfig, type ExecDeps } from "./buy.js";
 import { payoutClaim, refundGift, returnGift } from "./payouts.js";
 import { RETURN_WAIT_MS } from "./cashout.js";
@@ -700,6 +701,170 @@ describe.skipIf(!url)("execution pipeline (Postgres + fakes)", () => {
       wallet.crashAfterSell = true;
       await expect(returnGift(d, id)).rejects.toThrow(/crashed/);
       expect(await count()).toBe(before - 1);
+    });
+  });
+
+  describe("claim as USDT (recipient cash-out)", () => {
+    const SELL = parseUnits("5", 18);
+    const newAddress = () => getAddress(`0x${randomUUID().replace(/-/g, "")}00000000`);
+
+    async function claimingUsdt() {
+      const { id, claimCode } = await paidGift(5);
+      await runBuy(d, id);
+      const to = newAddress();
+      const r = await beginClaim(db, { giftId: id, code: claimCode, claimAddress: to, claimAs: "usdt", ip: randomUUID() });
+      expect(r.ok).toBe(true);
+      return { id, to };
+    }
+
+    it("sells the shares and pays the recipient the USDT", async () => {
+      const { id, to } = await claimingUsdt();
+      expect((await payoutClaim(d, id)).status).toBe("CLAIMED");
+      const g = (await getGift(db, id))!;
+      expect([g.status, g.claimAs, g.claimTx]).toEqual(["CLAIMED", "usdt", backend.signed.at(-1)!.hash]);
+      expect(backend.signed.at(-1)).toMatchObject({ token: USDT, to, amount: SELL });
+      expect(wallet.sellCalls).toBe(1);
+      expect(await records(id)).toMatchObject({ to_wallet: "confirmed", sell: "confirmed", proceeds: "confirmed", cashout: "confirmed" });
+      expect(await giftsClaimedBy(db, to)).toEqual([]); // cashed out: not a stock holding
+    });
+
+    it("trading wallet signed out: the recipient gets the shares right away instead", async () => {
+      const { id, to } = await claimingUsdt();
+      wallet.connected = false;
+      expect((await payoutClaim(d, id)).status).toBe("CLAIMED");
+      expect(backend.signed.at(-1)).toMatchObject({ token: TOKEN, to, amount: QUOTED });
+      expect((await getGift(db, id))!.failureReason).toMatch(/you got the shares instead/);
+      expect(wallet.sellCalls).toBe(0);
+      expect((await giftsClaimedBy(db, to)).map((g) => g.id)).toEqual([id]);
+    });
+
+    it("sale refused after the shares reached the trading wallet: they come back and go to the recipient", async () => {
+      const { id, to } = await claimingUsdt();
+      wallet.sellRefused = true;
+      expect((await payoutClaim(d, id)).status).toBe("CLAIMED");
+      expect(await records(id)).toMatchObject({ to_wallet: "confirmed", sell: "failed", unwind: "confirmed", claim: "confirmed" });
+      expect(backend.signed.at(-1)).toMatchObject({ token: TOKEN, to });
+    });
+
+    it("a claim is never released once the shares have left the vault for a sale", async () => {
+      const { id } = await claimingUsdt();
+      wallet.crashAfterSell = true;
+      await expect(payoutClaim(d, id)).rejects.toThrow(/crashed/);
+      backend.simulateOk = false; // the USDT payout can't be simulated
+      expect(await payoutClaim(d, id)).toMatchObject({ status: "PENDING" });
+      expect((await getGift(db, id))!.status).toBe("CLAIMING");
+    });
+  });
+
+  describe("group gifts", () => {
+    const newAddress = () => getAddress(`0x${randomUUID().replace(/-/g, "")}00000000`);
+    const quote: PoolQuote = async () => ({ ok: true, issuer: "bstock", tokenAddress: TOKEN, tokenDecimals: 18, tokenAmountRaw: QUOTED.toString() });
+
+    async function contribution(groupId: string, usd: number, paid = true) {
+      const payer = newAddress();
+      const { gift } = await createGift(
+        db,
+        {
+          senderAddress: payer,
+          senderName: `Friend ${usd}`,
+          recipientName: "Angela",
+          message: "well done",
+          ticker: "NVDA",
+          issuer: "bstock",
+          tokenAddress: TOKEN,
+          tokenDecimals: 18,
+          quotedTokenAmount: QUOTED,
+          usdCost: usd,
+          feeUsd: 0.1,
+          paymentExpiresAt: new Date(Date.now() + 60_000),
+          groupId,
+        },
+        { maxGiftUsd: 20, dailyCapUsd: 1e9 },
+      );
+      if (paid) await transition(db, gift.id, "AWAITING_PAYMENT", "PAID", { paymentTx: "0xpay" });
+      return { id: gift.id, payer };
+    }
+
+    async function group(amounts: number[]) {
+      const grp = await createGroup(db, {
+        ticker: "NVDA",
+        organizerAddress: SENDER,
+        organizerName: "Tony",
+        recipientName: "Angela",
+        message: "Congratulations",
+        closesAt: new Date(Date.now() + 3_600_000),
+        dryRun: false,
+      });
+      const parts = [];
+      for (const usd of amounts) parts.push(await contribution(grp.id, usd));
+      return { grp, parts };
+    }
+
+    const statusOf = async (id: string) => (await getGift(db, id))!.status;
+
+    it("a contribution is never bought on its own", async () => {
+      const { parts } = await group([2]);
+      expect((await runBuy(d, parts[0]!.id)).status).toBe("NOOP");
+      expect([wallet.swapCalls, backend.signed.length]).toEqual([0, 0]);
+    });
+
+    it("closing pools the paid contributions into one gift that is bought and claimed", async () => {
+      const { grp, parts } = await group([2, 3]);
+      const r = await closeGroup(db, grp.id, quote);
+      if (!r.ok || r.outcome !== "pooled") throw new Error("expected a pooled gift");
+      expect([r.gift.status, r.gift.usdCost, r.gift.feeUsd, r.gift.senderAddress, r.gift.groupRole]).toEqual(["PAID", 5, 0, SENDER, "pool"]);
+      expect(await Promise.all(parts.map((p) => statusOf(p.id)))).toEqual(["POOLED", "POOLED"]);
+
+      expect((await runBuy(d, r.gift.id)).status).toBe("READY");
+      expect(backend.signed[0]).toMatchObject({ token: USDT, to: AW, amount: parseUnits("5", 18) });
+      const claim = await beginClaim(db, { giftId: r.gift.id, code: r.claimCode, claimAddress: newAddress(), ip: randomUUID() });
+      expect(claim.ok).toBe(true);
+      expect(await closeGroup(db, grp.id, quote)).toMatchObject({ ok: false, status: 409 });
+    });
+
+    it("if the pooled gift isn't bought, each contributor gets back what they paid", async () => {
+      const { grp, parts } = await group([2, 3]);
+      const r = await closeGroup(db, grp.id, quote);
+      if (!r.ok || r.outcome !== "pooled") throw new Error("expected a pooled gift");
+      wallet.nextOrderStatus = "FAILED";
+      expect((await runBuy(d, r.gift.id)).status).toBe("FAILED");
+      expect((await refundGift(d, r.gift.id)).status).toBe("REFUNDED");
+
+      const pool = (await getGift(db, r.gift.id))!;
+      expect([pool.status, pool.refundTx]).toEqual(["REFUNDED", null]); // no transfer of its own
+      expect(await Promise.all(parts.map((p) => statusOf(p.id)))).toEqual(["REFUNDED", "REFUNDED"]);
+      const refunds = backend.signed.filter((x) => x.token === USDT && parts.some((p) => p.payer === x.to));
+      expect(refunds.map((x) => [x.to, x.amount])).toEqual(
+        expect.arrayContaining([
+          [parts[0]!.payer, parseUnits("2.1", 18)],
+          [parts[1]!.payer, parseUnits("3.1", 18)],
+        ]),
+      );
+    });
+
+    it("cancelling an open group refunds paid contributions and closes unpaid ones", async () => {
+      const { grp, parts } = await group([2]);
+      const unpaid = await contribution(grp.id, 4, false);
+      const r = await cancelGroup(db, grp.id);
+      expect(r).toMatchObject({ ok: true, refunding: [parts[0]!.id] });
+      expect(await statusOf(unpaid.id)).toBe("EXPIRED");
+      expect((await refundGift(d, parts[0]!.id)).status).toBe("REFUNDED");
+      expect(backend.signed.at(-1)).toMatchObject({ token: USDT, to: parts[0]!.payer, amount: parseUnits("2.1", 18) });
+    });
+
+    it("closing with nothing paid cancels the group", async () => {
+      const { grp } = await group([]);
+      expect(await closeGroup(db, grp.id, quote)).toMatchObject({ ok: true, outcome: "cancelled", refunding: [] });
+    });
+
+    it("a payment that lands after the group closed is refunded, not pooled", async () => {
+      const { grp } = await group([2]);
+      const late = await contribution(grp.id, 3, false);
+      await closeGroup(db, grp.id, quote);
+      expect(await statusOf(late.id)).toBe("AWAITING_PAYMENT");
+      await transition(db, late.id, "AWAITING_PAYMENT", "PAID", { paymentTx: "0xlate" }); // settled during the close
+      expect(await strandedContributions(db)).toContain(late.id);
+      expect((await refundGift(d, late.id)).status).toBe("REFUNDED");
     });
   });
 });

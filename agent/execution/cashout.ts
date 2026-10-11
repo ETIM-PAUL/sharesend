@@ -1,15 +1,17 @@
-// Return a gift to its sender as USDT instead of stock (the sender's choice, gift.returnAs = "usdt").
+// Pay out a gift as USDT instead of stock: to the sender on a return (gift.returnAs = "usdt"), or to the recipient
+// on a claim (gift.claimAs = "usdt").
 //
-//   vault ──stock──► Agentic Wallet ──baw sell──► USDT ──baw send──► vault ──USDT──► sender
+//   vault ──stock──► Agentic Wallet ──baw sell──► USDT ──baw send──► vault ──USDT──► sender or recipient
 //   (to_wallet)         (sell)                    (proceeds)          (cashout)
 //
 // Every step is recorded before its side effect and resumes where it stopped. If selling isn't possible, the
-// sender still gets their stock back, so the choice can never leave a gift stuck:
-//   - before anything moves: wait up to RETURN_WAIT_MS (market closed, wallet signed out, no quote), then return the stock
-//   - after the stock reached the Agentic Wallet and the sell is refused: send it back to the vault (unwind), then return it
+// payee still gets the stock, so the choice can never leave a gift stuck:
+//   - before anything moves: a return waits up to RETURN_WAIT_MS (market closed, wallet signed out, no quote); a claim
+//     doesn't wait (the recipient is on the page), it pays the shares right away
+//   - after the stock reached the Agentic Wallet and the sell is refused: send it back to the vault (unwind), then pay the stock
 import { formatUnits } from "viem";
 import type { Db } from "../db/pool.js";
-import { transition, type Gift } from "../gifts/ledger.js";
+import { completeClaim, recordTx, transition, type Gift } from "../gifts/ledger.js";
 import { BawError } from "../baw/cli.js";
 import { StillPendingError, type AgenticWalletPort } from "./ports.js";
 import { awSendOnce, driftBps, getRecord, startRecord, updateRecord, waitTransfer, type ExecDeps, type ExecOutcome } from "./buy.js";
@@ -43,7 +45,54 @@ async function sellBlocker(d: ExecDeps, g: Gift, amountHuman: string): Promise<s
   return null;
 }
 
+/** Who gets paid and how the gift finishes. */
+interface SellPlan {
+  /** Receives the USDT, or the stock when it can't be sold. */
+  to: string;
+  /** Vault transfer kind for paying the stock after an unwind. */
+  stockKind: "return" | "claim";
+  /** How long to keep trying before anything has moved, before paying the stock instead. */
+  waitMs: number;
+  /** Wall-clock time the payout started (ms). */
+  startedAt: number;
+  /** Pays the stock when nothing has moved yet. */
+  payStock: () => Promise<ExecOutcome>;
+  finish: (txHash: string) => Promise<ExecOutcome>;
+  /** Runs after a payout tx is recorded and before it's broadcast. */
+  onSigned?: (txHash: string) => Promise<void>;
+  /** "returned as stock" / "sent as shares": completes the note shown to the user. */
+  stockWords: string;
+}
+
 export async function returnAsUsdt(d: ExecDeps, g: Gift, returnStock: () => Promise<ExecOutcome>): Promise<ExecOutcome> {
+  return sellAndPay(d, g, {
+    to: g.senderAddress,
+    stockKind: "return",
+    waitMs: RETURN_WAIT_MS,
+    // Wall-clock age (the event time comes from the database), not the injectable polling clock.
+    startedAt: (await returningSince(d.db, g.id)) ?? Date.now(),
+    payStock: returnStock,
+    finish: async (txHash) => ({ status: "RETURNED", gift: await transition(d.db, g.id, "RETURNING", "RETURNED", { returnTx: txHash }) }),
+    stockWords: "it was returned as stock instead",
+  });
+}
+
+/** The recipient chose USDT: sell the shares and pay them the proceeds, or send the shares if they can't be sold now. */
+export async function claimAsUsdt(d: ExecDeps, g: Gift, claimStock: () => Promise<ExecOutcome>): Promise<ExecOutcome> {
+  const record = (hash: string) => recordTx(d.db, g.id, "CLAIMING", "claimTx", hash);
+  return sellAndPay(d, g, {
+    to: g.claimAddress!,
+    stockKind: "claim",
+    waitMs: 0,
+    startedAt: Date.now(),
+    payStock: claimStock,
+    finish: async (txHash) => ({ status: "CLAIMED", gift: await completeClaim(d.db, g.id, txHash) }),
+    onSigned: record,
+    stockWords: "you got the shares instead",
+  });
+}
+
+async function sellAndPay(d: ExecDeps, g: Gift, plan: SellPlan): Promise<ExecOutcome> {
   const amount = g.tokenAmount!;
   const amountHuman = formatUnits(amount, g.tokenDecimals);
   const usdt = d.cfg.usdt;
@@ -51,19 +100,18 @@ export async function returnAsUsdt(d: ExecDeps, g: Gift, returnStock: () => Prom
   const sleep = d.sleep ?? defaultSleep;
 
   const toWallet = await getRecord(d.db, g.id, "to_wallet");
-  const finish = async (txHash: string): Promise<ExecOutcome> => ({ status: "RETURNED", gift: await transition(d.db, g.id, "RETURNING", "RETURNED", { returnTx: txHash }) });
+  const finish = plan.finish;
 
   // ---- Before anything has moved: can we sell? Otherwise wait, and eventually fall back to the stock. ----
   if (!toWallet) {
-    // Wall-clock age (the event time comes from the database), not the injectable polling clock.
-    const waited = Date.now() - ((await returningSince(d.db, g.id)) ?? Date.now());
+    const waited = Date.now() - plan.startedAt;
     let blocker: string | null = null;
     if (!(await d.wallet.isConnected())) blocker = "the trading wallet is signed out";
     else blocker = await sellBlocker(d, g, amountHuman);
     if (blocker) {
-      if (waited < RETURN_WAIT_MS) return { status: "PENDING", reason: `can't sell yet: ${blocker}` };
-      await note(d.db, g.id, `Couldn't sell the stock (${blocker}), so it was returned as stock instead.`);
-      return returnStock();
+      if (waited < plan.waitMs) return { status: "PENDING", reason: `can't sell yet: ${blocker}` };
+      await note(d.db, g.id, `Couldn't sell the stock (${blocker}), so ${plan.stockWords}.`);
+      return plan.payStock();
     }
   }
 
@@ -85,8 +133,8 @@ export async function returnAsUsdt(d: ExecDeps, g: Gift, returnStock: () => Prom
           } catch (e) {
             if (e instanceof BawError && e.kind === "cli" && !e.isSessionError) {
               await updateRecord(d.db, g.id, "sell", { status: "failed", detail: { error: e.message } });
-              await note(d.db, g.id, `The sale was refused (${e.message}), so the stock was returned as stock instead.`);
-              return unwind(d, g, amountHuman, finish);
+              await note(d.db, g.id, `The sale was refused (${e.message}), so ${plan.stockWords}.`);
+              return unwind(d, g, amountHuman, plan);
             }
             throw e;
           }
@@ -94,7 +142,7 @@ export async function returnAsUsdt(d: ExecDeps, g: Gift, returnStock: () => Prom
         } else sell = await getRecord(d.db, g.id, "sell");
       }
       if (!orderId && sell) {
-        if (sell.status === "failed") return unwind(d, g, amountHuman, finish);
+        if (sell.status === "failed") return unwind(d, g, amountHuman, plan);
         orderId = (await d.wallet.findSellSince(g.tokenAddress, sell.started_at - 60_000)) ?? (await d.wallet.submitSell(g.tokenAddress, amountHuman, d.cfg.slippagePct));
         await updateRecord(d.db, g.id, "sell", { ref: orderId, status: "submitted" });
       }
@@ -125,8 +173,8 @@ export async function returnAsUsdt(d: ExecDeps, g: Gift, returnStock: () => Prom
       }
       if (order.status === "FAILED" || !order.txHash) {
         await updateRecord(d.db, g.id, "sell", { status: "failed" });
-        await note(d.db, g.id, "The sale didn't go through, so the stock was returned as stock instead.");
-        return unwind(d, g, amountHuman, finish);
+        await note(d.db, g.id, `The sale didn't go through, so ${plan.stockWords}.`);
+        return unwind(d, g, amountHuman, plan);
       }
       const received = await waitTransfer(d, order.txHash, usdt.address, d.wallet.address);
       if (received === null) return { status: "PENDING", reason: `sell tx ${order.txHash} not confirmed yet` };
@@ -134,7 +182,7 @@ export async function returnAsUsdt(d: ExecDeps, g: Gift, returnStock: () => Prom
       await updateRecord(d.db, g.id, "sell", { status: "confirmed", amount: received });
       sell = await getRecord(d.db, g.id, "sell");
     } else {
-      return unwind(d, g, amountHuman, finish);
+      return unwind(d, g, amountHuman, plan);
     }
 
     // 3. Proceeds → vault
@@ -145,8 +193,8 @@ export async function returnAsUsdt(d: ExecDeps, g: Gift, returnStock: () => Prom
     if (arrived === 0n) throw new Error(`proceeds tx ${hash} delivered nothing to the vault`);
     await updateRecord(d.db, g.id, "proceeds", { status: "confirmed", amount: arrived });
 
-    // 4. Vault → sender, exactly what arrived
-    const paid = await d.vault.transfer({ giftId: g.id, kind: "cashout", token: usdt.address, to: g.senderAddress, amount: arrived });
+    // 4. Vault → payee, exactly what arrived
+    const paid = await d.vault.transfer({ giftId: g.id, kind: "cashout", token: usdt.address, to: plan.to, amount: arrived }, plan.onSigned);
     return finish(paid.txHash);
   } catch (e) {
     if (e instanceof StillPendingError) return { status: "PENDING", reason: e.message };
@@ -155,16 +203,16 @@ export async function returnAsUsdt(d: ExecDeps, g: Gift, returnStock: () => Prom
   }
 }
 
-/** The sale was refused after the stock reached the Agentic Wallet: send it back to the vault, then return it as stock. */
-async function unwind(d: ExecDeps, g: Gift, amountHuman: string, finish: (tx: string) => Promise<ExecOutcome>): Promise<ExecOutcome> {
+/** The sale was refused after the stock reached the Agentic Wallet: send it back to the vault, then pay it as stock. */
+async function unwind(d: ExecDeps, g: Gift, amountHuman: string, plan: SellPlan): Promise<ExecOutcome> {
   if (!(await d.wallet.isConnected())) return { status: "QUEUED", reason: "Agentic Wallet signed out: the unsold stock waits there to be sent back" };
   const hash = await awSendOnce(d, g, "unwind", g.tokenAddress, amountHuman);
   const back = await waitTransfer(d, hash, g.tokenAddress, d.vault.address);
   if (back === null) return { status: "PENDING", reason: `unsold stock send to vault ${hash} not confirmed yet` };
   if (back === 0n) throw new Error(`unwind tx ${hash} delivered nothing to the vault`);
   await updateRecord(d.db, g.id, "unwind", { status: "confirmed", amount: back });
-  const r = await d.vault.transfer({ giftId: g.id, kind: "return", token: g.tokenAddress, to: g.senderAddress, amount: back < g.tokenAmount! ? back : g.tokenAmount! });
-  return finish(r.txHash);
+  const r = await d.vault.transfer({ giftId: g.id, kind: plan.stockKind, token: g.tokenAddress, to: plan.to, amount: back < g.tokenAmount! ? back : g.tokenAmount! }, plan.onSigned);
+  return plan.finish(r.txHash);
 }
 
 export type { AgenticWalletPort };

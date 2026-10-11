@@ -5,7 +5,8 @@ import { completeClaim, getGift, recordTx, releaseClaim, transition, type Gift }
 import { BawError } from "../baw/cli.js";
 import { SimulationFailedError, StillPendingError } from "./ports.js";
 import { awSendOnce, usdRaw, waitTransfer, type ExecDeps, type ExecOutcome } from "./buy.js";
-import { returnAsUsdt } from "./cashout.js";
+import { claimAsUsdt, returnAsUsdt } from "./cashout.js";
+import { unpool } from "../gifts/groups.js";
 
 async function load(d: ExecDeps, id: string): Promise<Gift> {
   const g = await getGift(d.db, id);
@@ -14,20 +15,32 @@ async function load(d: ExecDeps, id: string): Promise<Gift> {
   return g;
 }
 
-/** Pays out a gift in CLAIMING to its claim address. A failed simulation releases the claim (back to READY). */
+/**
+ * Pays out a gift in CLAIMING to its claim address: the shares, or (the recipient's choice) USDT from selling them.
+ * A failed simulation releases the claim (back to READY), but only while nothing has moved.
+ */
 export async function payoutClaim(d: ExecDeps, id: string): Promise<ExecOutcome> {
   const g = await load(d, id);
   if (g.status !== "CLAIMING") return { status: "NOOP", gift: g };
-  try {
+  const claimStock = async (): Promise<ExecOutcome> => {
     const r = await d.vault.transfer(
       { giftId: g.id, kind: "claim", token: g.tokenAddress, to: g.claimAddress!, amount: g.tokenAmount! },
       // Recorded before broadcast: from here on the claim can't be released.
       (hash) => recordTx(d.db, g.id, "CLAIMING", "claimTx", hash),
     );
     return { status: "CLAIMED", gift: await completeClaim(d.db, g.id, r.txHash) };
+  };
+  try {
+    return g.claimAs === "usdt" ? await claimAsUsdt(d, g, claimStock) : await claimStock();
   } catch (e) {
-    if (e instanceof SimulationFailedError) return { status: "RELEASED", reason: e.reason, gift: await releaseClaim(d.db, g.id, e.reason) };
+    if (e instanceof SimulationFailedError) {
+      // Once the stock has left the vault for a sale, the claim must finish where it is.
+      const moved = await d.db.query("SELECT 1 FROM exec_records WHERE gift_id = $1 AND kind = 'to_wallet'", [g.id]);
+      if (moved.rowCount) return { status: "PENDING", reason: `payout simulation failed after the sale started: ${e.reason}` };
+      return { status: "RELEASED", reason: e.reason, gift: await releaseClaim(d.db, g.id, e.reason) };
+    }
     if (e instanceof StillPendingError) return { status: "PENDING", reason: e.message };
+    if (e instanceof BawError && e.isSessionError) return { status: "QUEUED", reason: e.message };
     throw e;
   }
 }
@@ -73,6 +86,13 @@ export async function refundGift(d: ExecDeps, id: string): Promise<ExecOutcome> 
       const arrived = await waitTransfer(d, hash, d.cfg.usdt.address, d.vault.address);
       if (arrived === null) return { status: "PENDING", reason: `sweep ${hash} not confirmed yet` };
       await d.db.query("UPDATE exec_records SET status = 'confirmed', amount = $3, updated_at = now() WHERE gift_id = $1 AND kind = $2", [g.id, "sweep", arrived.toString()]);
+    }
+
+    // A group's pooled gift was paid by its contributions: refund each one to its own payer, not the organizer.
+    if (g.groupRole === "pool") {
+      const u = await unpool(d.db, g, g.failureReason ?? "not bought");
+      for (const cid of u.refunding) await refundGift(d, cid).catch((e) => console.error(`gift ${cid}: refund failed: ${(e as Error).message}`));
+      return { status: "REFUNDED", gift: u.gift };
     }
 
     const r = await d.vault.transfer({ giftId: g.id, kind: "refund", token: d.cfg.usdt.address, to: g.senderAddress, amount: usdRaw(g.usdCost + g.feeUsd, d.cfg.usdt.decimals) });

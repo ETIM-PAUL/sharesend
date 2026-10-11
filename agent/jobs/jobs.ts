@@ -7,6 +7,7 @@ import type { ExecOutcome } from "../execution/buy.js";
 import * as baw from "../baw/cli.js";
 import { recentRuns, type JobDef, type JobResult } from "./runner.js";
 import { alert } from "./alert.js";
+import { closeGroup, cancelGroup, groupsDueToClose, strandedContributions, GROUP_CLOSE_GRACE_MS, type PoolQuote } from "../gifts/groups.js";
 
 export interface JobDeps {
   advance: (db: Db, id: string) => Promise<ExecOutcome>;
@@ -15,6 +16,8 @@ export interface JobDeps {
   bawSettings?: () => Promise<baw.WalletSettings>;
   keepaliveMinutes?: number;
   alert?: (text: string) => Promise<void>;
+  /** Price for a closing group's pooled gift (the live picker by default). */
+  poolQuote?: PoolQuote;
 }
 
 async function ids(db: Db, sql: string, params: unknown[] = []): Promise<string[]> {
@@ -123,7 +126,7 @@ export function buildJobs(deps: JobDeps): JobDef[] {
     needsBaw: true,
     async run(db) {
       // Orders still waiting for their price belong to price-watch.
-      const list = await ids(db, "SELECT id FROM gifts WHERE status IN ('PAID', 'BUYING') AND (order_trigger IS NULL OR order_triggered_at IS NOT NULL) ORDER BY created_at LIMIT 5");
+      const list = await ids(db, "SELECT id FROM gifts WHERE status IN ('PAID', 'BUYING') AND (order_trigger IS NULL OR order_triggered_at IS NOT NULL) AND group_role IS DISTINCT FROM 'contribution' ORDER BY created_at LIMIT 5");
       if (!list.length) return { summary: "no paid gifts waiting" };
       // The Agentic Wallet handles one transaction at a time; stop as soon as it says wait.
       const r = await advanceAll(db, deps, list, ["QUEUED", "PENDING"]);
@@ -156,6 +159,45 @@ export function buildJobs(deps: JobDeps): JobDef[] {
         summary: `${list.length} waiting order${list.length === 1 ? "" : "s"}: ${waiting} still waiting, ${started} bought, ${refunded} refunded after their deadline`,
         detail: r,
       };
+    },
+  };
+
+  const groupClose: JobDef = {
+    name: "group-close",
+    title: "Closes group gifts at their closing time: buys one gift from everyone's contributions, or refunds them",
+    everyMs: 60_000,
+    async run(db) {
+      const quote = deps.poolQuote ?? (await import("../payments/openGift.js")).poolQuote;
+      let pooled = 0;
+      let cancelled = 0;
+      let waiting = 0;
+      const refund: string[] = [];
+      const buy: string[] = [];
+      for (const g of await groupsDueToClose(db)) {
+        const r = await closeGroup(db, g.id, quote);
+        if (r.ok && r.outcome === "pooled") {
+          pooled++;
+          buy.push(r.gift.id);
+        } else if (r.ok) {
+          cancelled++;
+          refund.push(...r.refunding);
+        } else if (Date.now() - g.closesAt.getTime() > GROUP_CLOSE_GRACE_MS) {
+          // No price for a whole day past closing: give everyone their money back.
+          const c = await cancelGroup(db, g.id, `couldn't be bought (${r.error})`);
+          if (c.ok) {
+            cancelled++;
+            refund.push(...c.refunding);
+          }
+        } else waiting++;
+      }
+      // A payment that settled while its group was closing was never pooled: refund it.
+      const stranded = await strandedContributions(db);
+      refund.push(...stranded);
+      const r = await advanceAll(db, deps, refund);
+      // The pooled gift is bought by buy-queue; nudge it now where buys run on this host.
+      if (process.env.AUTO_EXECUTE === "true" && buy.length) void advanceAll(db, deps, buy);
+      const parts = [pooled && `${pooled} bought as one gift`, cancelled && `${cancelled} cancelled`, waiting && `${waiting} waiting for a price`, stranded.length && `${stranded.length} late payments refunded`].filter(Boolean);
+      return { ok: !Object.values(r).some((x) => x.startsWith("error")), summary: parts.length ? parts.join(", ") : "no group gifts closing", detail: { refunds: r } };
     },
   };
 
@@ -213,7 +255,7 @@ export function buildJobs(deps: JobDeps): JobDef[] {
     },
   };
 
-  return [expireUnpaid, expiryReturns, resumePayouts, priceWatch, buyQueue, reconciliation, keepalive];
+  return [expireUnpaid, expiryReturns, resumePayouts, priceWatch, buyQueue, groupClose, reconciliation, keepalive];
 }
 
 export type { JobResult };

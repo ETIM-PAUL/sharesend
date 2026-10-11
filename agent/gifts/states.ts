@@ -7,6 +7,9 @@
 //                       │          │
 //                       ▼          ▼
 //                   REFUNDED   REFUNDING
+//
+// Group gifts: a paid contribution moves PAID ──► POOLED when its group closes (its money now pays for the group's
+// gift). If that gift is never bought, each contribution goes POOLED ──► REFUNDING ──► REFUNDED, back to its payer.
 
 export const STATUSES = [
   "AWAITING_PAYMENT",
@@ -21,6 +24,7 @@ export const STATUSES = [
   "FAILED",
   "RETURNING",
   "RETURNED",
+  "POOLED",
 ] as const;
 export type GiftStatus = (typeof STATUSES)[number];
 
@@ -29,7 +33,7 @@ export type BuyStep = (typeof STEPS)[number];
 
 export const TRANSITIONS: Record<GiftStatus, readonly GiftStatus[]> = {
   AWAITING_PAYMENT: ["PAID", "EXPIRED"],
-  PAID: ["BUYING", "REFUNDING"],
+  PAID: ["BUYING", "REFUNDING", "POOLED"],
   BUYING: ["READY", "FAILED"],
   // RETURNING: sender cancels, or the claim window ends.
   READY: ["CLAIMING", "RETURNING"],
@@ -38,6 +42,7 @@ export const TRANSITIONS: Record<GiftStatus, readonly GiftStatus[]> = {
   FAILED: ["REFUNDING"],
   REFUNDING: ["REFUNDED"],
   RETURNING: ["RETURNED"],
+  POOLED: ["REFUNDING"],
   CLAIMED: [],
   EXPIRED: [],
   REFUNDED: [],

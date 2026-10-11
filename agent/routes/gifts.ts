@@ -1,5 +1,6 @@
 // Gift + payment routes (x402 v2 over B402).
 //   POST /gifts                 create a gift → 402 Payment Required (body + PAYMENT-REQUIRED header)
+//                               the same request again with PAYMENT-SIGNATURE → paid, claim link (any x402 client or agent)
 //   GET|POST /gifts/:id/pay     no PAYMENT-SIGNATURE → 402 again; with it → verify, settle, PAID, claim link
 //   POST /gifts/:id/pay/draft   {from, asset} → exact EIP-712 data to sign, balance, and the Permit2 approve tx if needed
 //   GET /pay/:id                minimal pay page for browser wallets (MetaMask, Binance Web3 Wallet, Trust, …)
@@ -24,7 +25,9 @@ import { b402, BSC_NETWORK, type PaymentRequirements } from "../payments/b402.js
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { isAddress } from "viem";
-import { decodePaymentHeader, encodeHeader, paymentRequired, permit2ApproveTx, signingRequest } from "../payments/x402.js";
+import { decodePaymentHeader, encodeHeader, payerOf, paymentRequired, permit2ApproveTx, sameRequirements, signingRequest } from "../payments/x402.js";
+import type { PaymentPayload } from "../payments/b402.js";
+import type { GiftChannel } from "../gifts/ledger.js";
 import { onchainFunds, payForGift } from "../payments/pay.js";
 import { openGift } from "../payments/openGift.js";
 import { economics } from "../payments/economics.js";
@@ -65,6 +68,9 @@ function publicGift(g: Gift) {
     claimExpiresAt: g.claimExpiresAt,
     createdAt: g.createdAt,
     returnAs: g.returnAs,
+    channel: g.channel,
+    // Group gifts: a contribution (never bought on its own) or the group's pooled gift.
+    group: g.groupId ? { id: g.groupId, role: g.groupRole } : null,
     // A conditional order: where it stands, never anything private.
     order: g.order
       ? {
@@ -89,7 +95,7 @@ function publicGift(g: Gift) {
   };
 }
 
-function respond402(c: Context, g: Gift, error?: string, extra: Record<string, unknown> = {}) {
+export function respond402(c: Context, g: Gift, error?: string, extra: Record<string, unknown> = {}) {
   const body = paymentRequired(`${origin(c)}/gifts/${g.id}/pay`, `${g.ticker} gift for ${g.recipientName}: $${g.usdCost} + $${g.feeUsd} fee`, (g.paymentRequirements ?? []) as PaymentRequirements[], error);
   c.header("PAYMENT-REQUIRED", encodeHeader(body));
   return c.json({ ...body, gift: publicGift(g), ...extra }, 402);
@@ -103,13 +109,60 @@ function dbOr503(c: Context) {
   }
 }
 
+/** The web app calls from one of WEB_ORIGINS; anything else (no Origin, another site) is another agent or script. */
+function channelOf(c: Context): GiftChannel {
+  const webOrigins = (process.env.WEB_ORIGINS ?? "http://localhost:3000").split(",").map((o) => o.trim());
+  const o = c.req.header("origin");
+  return o && webOrigins.includes(o) ? "web" : "agent";
+}
+
+/**
+ * x402 at a single URL: a client that got a 402 from POST /gifts sends the same request again with PAYMENT-SIGNATURE.
+ * The payment is matched to the open gift it was signed for (same sender, stock, amount and recipient, and the exact
+ * requirements it accepted); with none left (e.g. the price hold ran out), a fresh gift is opened for it.
+ */
+async function payAtCreate(c: Context, db: NonNullable<ReturnType<typeof dbOr503>>, input: any, header: string) {
+  const payload = decodePaymentHeader(header);
+  if (!payload) return c.json({ ok: false, error: "malformed PAYMENT-SIGNATURE header" }, 400);
+  const payer = payerOf(payload);
+  if (!payer) return c.json({ ok: false, error: "the payment has no payer address" }, 400);
+  if (input?.senderAddress && String(input.senderAddress).toLowerCase() !== payer.toLowerCase())
+    return c.json({ ok: false, error: "senderAddress must be the address that signs the payment" }, 400);
+
+  let g: Gift | null = null;
+  if (typeof input?.giftId === "string") g = await getGift(db, input.giftId);
+  else {
+    const { rows } = await db.query<{ id: string }>(
+      `SELECT id FROM gifts WHERE status = 'AWAITING_PAYMENT' AND payment_expires_at > now() AND group_id IS NULL
+         AND lower(sender_address) = lower($1) AND ticker = upper($2) AND usd_cost = $3 AND recipient_name = $4
+       ORDER BY created_at DESC LIMIT 5`,
+      [payer, String(input?.ticker ?? ""), Math.round(Number(input?.usd) * 100) / 100, String(input?.recipientName ?? "").trim()],
+    );
+    for (const r of rows) {
+      const cand = await getGift(db, r.id);
+      if (cand && ((cand.paymentRequirements ?? []) as PaymentRequirements[]).some((req) => sameRequirements(req, (payload as PaymentPayload).accepted))) {
+        g = cand;
+        break;
+      }
+    }
+  }
+  if (!g) {
+    const r = await openGift(db, { ...(input ?? {}), senderAddress: payer }, await dailyUsedUsd(db), channelOf(c));
+    if (!r.ok) return c.json({ ok: false, code: r.code, error: r.message }, r.status);
+    g = r.gift;
+  }
+  return settle(c, db, g, payload);
+}
+
 gifts.post("/gifts", async (c) => {
   if (limited(clientIp(c))) return c.json({ ok: false, error: "too many requests" }, 429);
   const db = dbOr503(c);
   if (!db) return c.json({ ok: false, error: "database not configured" }, 503);
   const input = await c.req.json().catch(() => null);
   try {
-    const r = await openGift(db, input, await dailyUsedUsd(db));
+    const header = c.req.header("PAYMENT-SIGNATURE") ?? c.req.header("X-PAYMENT");
+    if (header) return await payAtCreate(c, db, input, header);
+    const r = await openGift(db, input, await dailyUsedUsd(db), channelOf(c));
     if (!r.ok) return c.json({ ok: false, code: r.code, error: r.message }, r.status);
     const q = r.quote;
     c.header("Location", `/gifts/${r.gift.id}/pay`);
@@ -149,7 +202,12 @@ async function pay(c: Context) {
   }
   const payload = decodePaymentHeader(header);
   if (!payload) return respond402(c, g, "malformed PAYMENT-SIGNATURE header");
+  return settle(c, db, g, payload);
+}
 
+/** Verify, settle and answer for one gift and one payment. */
+async function settle(c: Context, db: NonNullable<ReturnType<typeof dbOr503>>, g: Gift, payload: PaymentPayload) {
+  const id = g.id;
   try {
     const r = await payForGift({ db, facilitator: b402, funds: onchainFunds, liveTrading: config.liveTrading }, id, payload);
     if (!r.ok) {
@@ -160,12 +218,15 @@ async function pay(c: Context) {
     // Start the buy right away when this host can run it (needs a signed-in `baw`); otherwise it waits as "queued".
     if (!r.alreadyPaid && process.env.AUTO_EXECUTE === "true") advanceInBackground(db, id);
     const base = process.env.CLAIM_BASE_URL ?? origin(c);
+    // A group contribution has no claim link of its own: the group's gift gets one when the group closes.
+    const contribution = r.gift.groupRole === "contribution";
     return c.json({
       ok: true,
       gift: publicGift(r.gift),
       settleTx: r.settleTx,
       // Only present in the first successful response. Share it with the recipient; it can't be shown again.
-      claimUrl: r.claimCode ? claimLink(base, r.gift.id, r.claimCode) : null,
+      claimUrl: r.claimCode && !contribution ? claimLink(base, r.gift.id, r.claimCode) : null,
+      groupUrl: contribution ? `${base}/g/${r.gift.groupId}` : null,
       alreadyPaid: r.alreadyPaid,
     });
   } catch (e) {

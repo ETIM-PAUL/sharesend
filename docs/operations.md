@@ -95,3 +95,41 @@ Each gift has a `return_as` setting, chosen by the sender:
 - The sender can cancel any time before it buys; that is the existing paid-gift cancel, which refunds in full.
 
 If chat shows "The assistant couldn't answer just now", run `npm run cli -- admin chat-test <SERVER_URL>`. It makes one tiny model call and prints the exact error (for example `HTTP 401` for a rejected key, or a billing message when the account has no credit). The server also logs the same line as `chat failed: …`.
+
+## Recipient cash-out (claim as USDT)
+
+On the claim page the recipient picks **the shares** or **dollars (USDT)**. USDT runs the same sell path as a USDT return, paid to the claim address instead of the sender: vault → Agentic Wallet (`to_wallet`) → `baw` sell → proceeds to the vault → vault → recipient (`cashout`). The gift stays `CLAIMING` until the USDT lands, then `CLAIMED` with the payout as its claim tx.
+
+- It needs the trading wallet. If it's signed out, or there's no sell quote, the recipient gets the shares straight away (a return waits up to 24 hours; a claim doesn't, because the recipient is on the page). The claim page says so.
+- If the sale is refused after the shares reached the Agentic Wallet, they go back to the vault and on to the recipient as shares.
+- Once the shares have left the vault, the claim can't be released back to `READY`, even if a later simulation fails: it stays `CLAIMING` for the payout job to finish.
+- A cashed-out gift isn't listed under "Your stock".
+
+## Group gifts
+
+From `/send`, "Friends chip in" starts a group: the stock, the recipient, a note and how long to collect (1, 3 or 7 days). The organizer signs in (their wallet gets an unclaimed gift back) and shares the group page, `/g/<id>`.
+
+- Each contribution is an ordinary gift row (`group_role = 'contribution'`), paid through B402 like any gift, with its own $0.10 fee. It is never bought on its own.
+- A group takes up to `MAX_GIFT_USD` in total; unpaid contributions hold their share while their price hold runs.
+- **Close**: at the closing time the `group-close` job (every minute) moves every paid contribution `PAID → POOLED` and inserts one pooled gift (`group_role = 'pool'`, fee 0) as `PAID`. `buy-queue` buys it like any gift. The organizer can close early from the group page (signed message) and gets the claim link once; after an automatic close they get one from the gift's page ("Get a new claim link").
+- **Cancel**, or a close with nothing paid: paid contributions are refunded to whoever paid them, fee included.
+- **If the pooled gift isn't bought** (buy fails, or the organizer cancels it before it's bought): it ends `REFUNDED` with no transfer of its own, and each contribution goes `POOLED → REFUNDING` and is refunded to its payer.
+- **Unclaimed or cancelled after it's bought**: it goes back to the organizer, like any gift. The chip-in form says so.
+- A payment that settles while its group is closing is refunded by the same job. The claim page lists everyone who chipped in, with their notes.
+- If no price is available at closing time (e.g. no issuer quote), the job keeps trying for 24 hours, then cancels and refunds.
+
+## Gifts from other agents (x402)
+
+The ERC-8004 registration already lists `POST /gifts` as ShareSend's `x402` endpoint with `send_gift`. Any agent can use it as a standard x402 resource at one URL:
+
+1. `POST /gifts` with `{ticker, usd, senderAddress, senderName, recipientName, message}` → `402` with `PAYMENT-REQUIRED`.
+2. Sign one option (any x402 v2 client; with a Binance Agentic Wallet: `baw x402-payment preview` / `sign`).
+3. The same `POST /gifts` again with `PAYMENT-SIGNATURE` → `200` with the claim link, once.
+
+The replay is matched to the open gift it was signed for (same payer, stock, amount, recipient and exact accepted requirements); if that gift's price hold has run out, a fresh gift is opened for the same payment. The payer must be `senderAddress`, so refunds and returns go back to the paying agent. Gifts created without the web app's Origin are recorded with `channel = 'agent'` and counted on `/agent`.
+
+For discovery: `GET /.well-known/agent-card.json` (skills, payment, identity) and `GET /skill.md` (step-by-step instructions). To send one from the Agentic Wallet as "another agent":
+
+    npm run cli -- b402-pay <SERVER_URL> NVDA 1 --to Ada --from "Payroll bot" --message "Your first share" --confirm
+
+That moves real funds when the server runs with `LIVE_TRADING=true`; add `--show-link` to print the claim link.

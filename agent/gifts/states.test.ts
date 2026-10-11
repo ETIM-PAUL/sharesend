@@ -10,6 +10,8 @@ describe("state machine", () => {
         "AWAITING_PAYMENT→EXPIRED",
         "PAID→BUYING",
         "PAID→REFUNDING",
+        "PAID→POOLED",
+        "POOLED→REFUNDING",
         "BUYING→READY",
         "BUYING→FAILED",
         "READY→CLAIMING",

@@ -1,7 +1,8 @@
 // Recipient routes. The claim code comes from the link's #fragment and is sent in the request body only;
 // it is never logged and never appears in a URL the server sees.
 //   POST /claims/:id/view   {code}                              → the gift card, stock profile and value
-//   POST /claims/:id        {code, address, confirmEligible}    → READY → CLAIMING, payout runs in the background
+//   POST /claims/:id        {code, address, confirmEligible, claimAs?}  → READY → CLAIMING, payout runs in the background
+//                           claimAs "usdt": the shares are sold and the recipient gets USDT (or the shares, if they can't be sold now)
 //   GET  /holdings/:address                                      → stock received through ShareSend, with value now
 import { Hono, type Context } from "hono";
 import { isAddress } from "viem";
@@ -11,6 +12,7 @@ import { advanceInBackground } from "../execution/advance.js";
 import { sharesOf, stockInfo, valuation, type StockInfo } from "../claims/stock.js";
 import { rawBalances } from "../binance/wallet.js";
 import { walletBalances } from "../wallet/balances.js";
+import { groupContributors } from "../gifts/groups.js";
 
 export const claims = new Hono();
 
@@ -76,6 +78,8 @@ claims.post("/claims/:id/view", async (c) => {
 
   const info = await stockInfo(g.tokenAddress).catch(() => null);
   const shares = giftShares(g, info);
+  const cash = g.claimAs === "usdt" ? await db.query<{ amount: string }>("SELECT amount FROM exec_records WHERE gift_id = $1 AND kind = 'cashout' AND status = 'confirmed'", [g.id]) : null;
+  const contributors = g.groupRole === "pool" ? await groupContributors(db, g.groupId!) : [];
   const v = info && shares ? await valuation(info, shares, (g.readyAt ?? g.createdAt).getTime()).catch(() => null) : null;
   const claimed = g.status === "CLAIMING" || g.status === "CLAIMED";
   return c.json({
@@ -98,6 +102,13 @@ claims.post("/claims/:id/view", async (c) => {
       claimError: g.status === "READY" ? g.failureReason : null,
       claimAddress: claimed ? g.claimAddress : null,
       claimTx: g.claimTx && /^0x[0-9a-fA-F]{64}$/.test(g.claimTx) ? g.claimTx : null,
+      claimAs: claimed ? g.claimAs : null,
+      // USDT the recipient received when they cashed out (18 decimals), or null.
+      cashedOutUsdt: cash?.rows[0] ? Number(BigInt(cash.rows[0].amount) / 10n ** 14n) / 10_000 : null,
+      // Why a cash-out ended as shares instead (set by the sell path), shown once claimed.
+      payoutNote: g.status === "CLAIMED" && g.claimAs === "usdt" ? g.failureReason : null,
+      // A group gift: everyone who chipped in (names and notes only).
+      contributors,
       dryRun: g.dryRun,
     },
     stock: stockCard(info),
@@ -108,7 +119,7 @@ claims.post("/claims/:id/view", async (c) => {
 claims.post("/claims/:id", async (c) => {
   const db = db503();
   if (!db) return c.json({ ok: false, error: "database not configured" }, 503);
-  const body = (await c.req.json().catch(() => null)) as { code?: unknown; address?: unknown; confirmEligible?: unknown } | null;
+  const body = (await c.req.json().catch(() => null)) as { code?: unknown; address?: unknown; confirmEligible?: unknown; claimAs?: unknown } | null;
   if (body?.confirmEligible !== true) return c.json({ ok: false, error: "Confirm you're allowed to hold this stock where you live." }, 400);
   if (typeof body.address !== "string" || !isAddress(body.address)) return c.json({ ok: false, reason: "BAD_ADDRESS", error: CLAIM_ERRORS.BAD_ADDRESS.message }, 400);
   const id = c.req.param("id");
@@ -116,6 +127,7 @@ claims.post("/claims/:id", async (c) => {
     giftId: id,
     code: typeof body.code === "string" ? body.code : "",
     claimAddress: body.address,
+    claimAs: body.claimAs === "usdt" ? "usdt" : "stock",
     ip: clientIp(c),
     // The gift can't be "claimed" back into ShareSend's own wallets.
     forbiddenAddresses: [process.env.VAULT_ADDRESS, process.env.AGENTIC_WALLET_ADDRESS].filter((a): a is string => !!a),

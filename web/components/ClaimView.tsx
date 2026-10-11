@@ -79,7 +79,9 @@ export function ClaimView() {
   return (
     <div className="space-y-6">
       <p className="text-[1.05rem] text-ink">
-        {g.senderName} sent you a piece of {s?.companyName ?? g.ticker}.
+        {g.contributors.length > 1
+          ? `${names(g.contributors.map((c) => c.name))} chipped in to send you a piece of ${s?.companyName ?? g.ticker}.`
+          : `${g.senderName} sent you a piece of ${s?.companyName ?? g.ticker}.`}
       </p>
 
       <Certificate
@@ -94,6 +96,8 @@ export function ClaimView() {
         sealed={sealed}
       />
 
+      {g.contributors.length > 1 ? <FromEveryone contributors={g.contributors} /> : null}
+
       <ValueNow data={data} />
 
       <ClaimPanel id={id} code={code!} data={data} onClaimed={(st) => setData({ ...data, gift: { ...g, status: st } })} />
@@ -101,6 +105,28 @@ export function ClaimView() {
       <Explainer data={data} />
       {g.dryRun ? <p className="text-xs text-ink-soft">Test gift: no real money or stock moves.</p> : null}
     </div>
+  );
+}
+
+/** "Ada", "Ada and Bisi", "Ada, Bisi and Chi" */
+function names(list: string[]): string {
+  const u = [...new Set(list)];
+  return u.length <= 1 ? (u[0] ?? "") : `${u.slice(0, -1).join(", ")} and ${u.at(-1)}`;
+}
+
+function FromEveryone({ contributors }: { contributors: ClaimViewData["gift"]["contributors"] }) {
+  return (
+    <section className="space-y-2">
+      <h2 className="text-sm font-medium text-ink-soft">From everyone who chipped in</h2>
+      <ul className="space-y-2">
+        {contributors.map((c, i) => (
+          <li key={i} className="rounded-[10px] bg-sheet px-3.5 py-2.5">
+            <p className="text-[0.95rem] font-semibold text-ink">{c.name}</p>
+            {c.note ? <p className="text-[0.95rem] italic text-ink">{c.note}</p> : null}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
@@ -129,16 +155,34 @@ function ClaimPanel({ id, code, data, onClaimed }: { id: string; code: string; d
   const { wallets } = useWallets();
   const emailWallet = wallets.find((w) => w.walletClientType.startsWith("privy")) ?? wallets[0];
   const [mode, setMode] = useState<"email" | "paste">("email");
+  const [claimAs, setClaimAs] = useState<"stock" | "usdt">("stock");
   const [pasted, setPasted] = useState("");
   const [eligible, setEligible] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  if (g.status === "CLAIMED" && g.cashedOutUsdt !== null)
+    return (
+      <section className="space-y-3 rounded-[10px] bg-sheet p-4">
+        <p className="numerals text-2xl font-bold text-ink">You got {usd(g.cashedOutUsdt)}.</p>
+        <p className="text-[0.95rem] text-ink">The shares were sold and the dollars (USDT) are in your wallet, {g.claimAddress ? shortAddr(g.claimAddress) : "on BNB Chain"}.</p>
+        <Link href="/wallet">
+          <Button>Open your wallet</Button>
+        </Link>
+        {g.claimTx ? (
+          <a className="block text-center text-sm text-engrave underline underline-offset-4" href={`https://bscscan.com/tx/${g.claimTx}`} target="_blank" rel="noopener noreferrer">
+            The payment on BscScan
+          </a>
+        ) : null}
+      </section>
+    );
 
   if (g.status === "CLAIMED")
     return (
       <section className="space-y-3 rounded-[10px] bg-sheet p-4">
         <p className="numerals text-2xl font-bold text-ink">It&apos;s yours.</p>
         <p className="text-[0.95rem] text-ink">The shares are in your wallet. You can see them, and what they&apos;re worth, any time.</p>
+        {g.payoutNote ? <p className="text-sm text-ink-soft">{g.payoutNote}</p> : null}
         <Link href={g.claimAddress ? `/you?address=${g.claimAddress}` : "/you"}>
           <Button>See your stock</Button>
         </Link>
@@ -150,7 +194,12 @@ function ClaimPanel({ id, code, data, onClaimed }: { id: string; code: string; d
       </section>
     );
 
-  if (g.status === "CLAIMING") return <Notice>Sending your shares to your wallet. This usually takes under a minute.</Notice>;
+  if (g.status === "CLAIMING")
+    return (
+      <Notice>
+        {g.claimAs === "usdt" ? "Selling the shares and sending you the dollars. This can take a few minutes; this page updates by itself." : "Sending your shares to your wallet. This usually takes under a minute."}
+      </Notice>
+    );
   if (g.status === "PAID" || g.status === "BUYING") return <Notice>Your stock hasn&apos;t been bought yet. This page updates by itself, and you can claim it as soon as it&apos;s ready.</Notice>;
   if (g.status === "AWAITING_PAYMENT") return <Notice>This gift hasn&apos;t been paid for yet.</Notice>;
   if (g.status === "READY" && g.expired) return <Notice kind="error">This gift wasn&apos;t claimed in time, so it&apos;s going back to {g.senderName}.</Notice>;
@@ -169,7 +218,7 @@ function ClaimPanel({ id, code, data, onClaimed }: { id: string; code: string; d
     setBusy(true);
     setError(null);
     try {
-      const r = await claimApi.claim(id, code, address!);
+      const r = await claimApi.claim(id, code, address!, claimAs);
       onClaimed(r.status);
     } catch (e) {
       setError(e instanceof AgentError ? e.message : (e as Error).message);
@@ -203,6 +252,26 @@ function ClaimPanel({ id, code, data, onClaimed }: { id: string; code: string; d
         </label>
       )}
 
+      <fieldset>
+        <legend className="mb-2 text-sm font-medium text-ink">How do you want it?</legend>
+        <div className="space-y-2">
+          {(
+            [
+              ["stock", "The shares", `Keep your piece of ${data.stock?.companyName ?? g.ticker}. Its value moves with the share price.`],
+              ["usdt", "Dollars (USDT)", `We sell the shares and send you about ${g.valueNowUsd !== null ? usd(g.valueNowUsd) : "their value"} in USDT on BNB Chain: what they sell for, a little more or less. If they can't be sold right now, you get the shares instead.`],
+            ] as const
+          ).map(([value, label, hint]) => (
+            <label key={value} className={`flex cursor-pointer items-start gap-3 rounded-[10px] border px-3.5 py-3 ${claimAs === value ? "border-engrave bg-sheet" : "border-rule"}`}>
+              <input type="radio" name="claim-as" className="mt-1 accent-[var(--engrave)]" checked={claimAs === value} onChange={() => setClaimAs(value)} />
+              <span>
+                <span className="block text-[0.95rem] text-ink">{label}</span>
+                <span className="block text-xs text-ink-soft">{hint}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+
       <label className="flex items-start gap-3 text-sm text-ink">
         <input type="checkbox" className="mt-1 h-4 w-4 accent-[var(--engrave)]" checked={eligible} onChange={(e) => setEligible(e.target.checked)} />
         <span>
@@ -212,7 +281,7 @@ function ClaimPanel({ id, code, data, onClaimed }: { id: string; code: string; d
 
       {(mode === "paste" || (authenticated && emailWallet)) && (
         <Button onClick={claim} disabled={!addressOk || !eligible || busy}>
-          {busy ? "Claiming…" : "Claim my shares"}
+          {busy ? "Claiming…" : claimAs === "usdt" ? "Claim as dollars" : "Claim my shares"}
         </Button>
       )}
 

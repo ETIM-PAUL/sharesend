@@ -236,3 +236,9 @@ export function paymentPayloadFrom(r: PaymentRequirements, draft: SigningDraft, 
 export function permit2ApproveTx(asset: string): { to: string; data: Hex; value: "0x0" } {
   return { to: getAddress(asset), data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [PERMIT2_ADDRESS as Address, maxUint256] }), value: "0x0" };
 }
+
+/** Who signed a payment: the `from` of its authorization, or null if it has none. */
+export function payerOf(p: PaymentPayload): string | null {
+  const from = (p.payload as Eip3009Payload)?.authorization?.from ?? (p.payload as Permit2Payload)?.permit2Authorization?.from;
+  return typeof from === "string" && isAddress(from) ? getAddress(from) : null;
+}

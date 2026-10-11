@@ -85,6 +85,16 @@ export async function payForGift(d: PayDeps, giftId: string, payload: PaymentPay
   if (gift.status !== "AWAITING_PAYMENT") return fail(409, `gift is ${gift.status}`);
   // A settlement already in flight for this exact payload may have moved money: always let it finish.
   const resuming = prev?.status === "settling";
+  // A contribution to a group gift can only be paid while the group is open. (One that settles while the group is
+  // closing is refunded by the group job.)
+  if (!resuming && gift.groupRole === "contribution") {
+    const grp = await d.db.query<{ status: string; closes_at: Date }>("SELECT status, closes_at FROM gift_groups WHERE id = $1", [gift.groupId]);
+    const open = grp.rows[0]?.status === "OPEN" && grp.rows[0].closes_at.getTime() / 1000 > now;
+    if (!open) {
+      await transition(d.db, giftId, "AWAITING_PAYMENT", "EXPIRED", { failureReason: "the group gift closed" }).catch(() => {});
+      return fail(410, "this group gift has closed, so nothing was charged");
+    }
+  }
   if (!resuming && gift.paymentExpiresAt.getTime() / 1000 <= now) {
     await transition(d.db, giftId, "AWAITING_PAYMENT", "EXPIRED").catch(() => {});
     return fail(410, "payment window expired; request a new quote");

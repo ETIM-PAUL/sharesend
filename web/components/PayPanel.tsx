@@ -23,12 +23,16 @@ interface Props {
   order?: { dropPct: number; deadline: string; text?: string };
   onPaid: (r: PaidResult) => void;
   onExpired: () => void;
+  /** Opens something other than a plain gift (a group contribution). Gets the paying address; returns the 402. */
+  open?: (senderAddress: string) => Promise<{ gift: PublicGift; accepts: PaymentRequirement[] }>;
+  /** Button text before the amount, default "Pay". */
+  payLabel?: string;
 }
 
 const isEmbedded = (w: ConnectedWallet) => w.walletClientType.startsWith("privy");
 
 /** Sign in (Privy), open the gift, pick a stablecoin, approve once if needed, sign, pay. */
-export function PayPanel({ ticker, amountUsd, senderName, recipientName, message, returnAs, order, onPaid, onExpired }: Props) {
+export function PayPanel({ ticker, amountUsd, senderName, recipientName, message, returnAs, order, onPaid, onExpired, open, payLabel = "Pay" }: Props) {
   const { ready, authenticated, login } = usePrivy();
   const { wallets, ready: walletsReady } = useWallets();
   const [chosen, setChosen] = useState<string | null>(null);
@@ -72,11 +76,17 @@ export function PayPanel({ ticker, amountUsd, senderName, recipientName, message
   // Open the gift once per wallet (the payer must be the sender: refunds and returns go back to it).
   const walletAddress = wallet?.address;
   const openedFor = useRef<string | null>(null);
+  const openRef = useRef(open);
+  useEffect(() => {
+    openRef.current = open;
+  });
   useEffect(() => {
     if (!walletAddress || openedFor.current === walletAddress) return;
     openedFor.current = walletAddress;
-    agent
-      .openGift({ ticker, usd: amountUsd, senderAddress: walletAddress, senderName, recipientName, message, returnAs, order })
+    (openRef.current
+      ? openRef.current(walletAddress)
+      : agent.openGift({ ticker, usd: amountUsd, senderAddress: walletAddress, senderName, recipientName, message, returnAs, order })
+    )
       .then((r) => {
         if (openedFor.current !== walletAddress) return;
         const opened = { gift: r.gift, accepts: r.accepts, from: walletAddress };
@@ -220,7 +230,7 @@ export function PayPanel({ ticker, amountUsd, senderName, recipientName, message
 
           {draft?.sufficient && !draft.needsApproval ? (
             <Button onClick={pay} disabled={!!busy || left <= 0}>
-              Pay {usd(gift.gift.usd + gift.gift.fee)} in {sym}
+              {payLabel} {usd(gift.gift.usd + gift.gift.fee)} in {sym}
             </Button>
           ) : null}
 

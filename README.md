@@ -154,5 +154,6 @@ docs/         issuers, operations, live proof, friction log
 - A non-custodial escrow contract with signature-based claims, instead of the custodial vault.
 - Contacts, and sending the claim link automatically over SMS or WhatsApp.
 - Remittance split: part cash, part into an index fund.
-- Scheduled sends, and cash-out to USDT for recipients.
+- **Cash out for recipients:** first to USDT on the claim page (the sell-back that already works for senders, pointed at the recipient's wallet), then to Naira through a licensed off-ramp partner. The Naira step depends on partner onboarding, identity verification and local regulation, so it's a direction, not a commitment.
+- Scheduled sends.
 - A Telegram interface.

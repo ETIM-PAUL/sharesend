@@ -78,6 +78,11 @@ agentRoutes.get("/agent/status", async (c) => {
   });
   const keepalive = runs["keepalive"];
   const reconcile = runs["reconcile"];
+  // Gifts other agents paid for directly over x402, and group gifts.
+  const usage = await db.query<{ agent_gifts: string; groups: string }>(
+    `SELECT (SELECT count(*) FROM gifts WHERE channel = 'agent' AND paid_at IS NOT NULL AND NOT dry_run) AS agent_gifts,
+            (SELECT count(*) FROM gift_groups WHERE status = 'POOLED' AND NOT dry_run) AS groups`,
+  );
   return c.json({
     ok: true,
     agent: { name: "ShareSend", liveTrading: config.liveTrading, vault: process.env.VAULT_ADDRESS ?? null, schedulerRunning: !!scheduler },
@@ -86,6 +91,7 @@ agentRoutes.get("/agent/status", async (c) => {
     session: keepalive ? { checkedAt: keepalive.finishedAt, ...(keepalive.detail as object) } : null,
     proof: reconcile ? { checkedAt: reconcile.finishedAt, summary: reconcile.summary, ...(reconcile.detail as object) } : null,
     economics: money,
+    forAgents: { giftsFromAgents: Number(usage.rows[0]!.agent_gifts), groupGiftsBought: Number(usage.rows[0]!.groups) },
   });
 });
 

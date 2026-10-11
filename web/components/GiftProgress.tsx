@@ -82,9 +82,11 @@ function outcome(g: PublicGift): string | null {
       if (g.failureReason?.startsWith("Not bought:")) return g.failureReason;
       return `The purchase didn't go through${g.failureReason ? ` (${g.failureReason})` : ""}. Your payment is being refunded.`;
     case "REFUNDED":
-      return "Refunded in full to the wallet you paid from.";
+      return g.group?.role === "pool" ? "Not bought, so everyone who chipped in was refunded in full." : "Refunded in full to the wallet you paid from.";
     case "EXPIRED":
       return "This gift was never paid, so nothing was charged.";
+    case "POOLED":
+      return "Your contribution is part of the group gift, bought together with everyone else's.";
     default:
       return null;
   }

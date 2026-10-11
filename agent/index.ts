@@ -8,6 +8,8 @@ import { gifts } from "./routes/gifts.js";
 import { claims } from "./routes/claims.js";
 import { agentRoutes } from "./routes/agent.js";
 import { chatRoutes } from "./routes/chat.js";
+import { groupRoutes } from "./routes/groups.js";
+import { forAgents } from "./routes/forAgents.js";
 import { startScheduler } from "./jobs/runner.js";
 import { buildJobs } from "./jobs/jobs.js";
 import { setScheduler } from "./jobs/instance.js";
@@ -92,6 +94,8 @@ app.route("/", gifts);
 app.route("/", claims);
 app.route("/", agentRoutes);
 app.route("/", chatRoutes());
+app.route("/", groupRoutes);
+app.route("/", forAgents);
 
 // Apply pending migrations on boot, then start the autonomous jobs (JOBS=off disables them).
 if (process.env.DATABASE_URL)

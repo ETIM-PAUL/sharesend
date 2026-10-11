@@ -1,6 +1,6 @@
-// Pays for a gift as a standard x402 client, using the Agentic Wallet (`baw x402-payment`). For the Phase 7
-// live test: the Agentic Wallet is the sender, the vault receives gift + fee via B402.
-//   npm run cli -- b402-pay <SERVER_URL> <TICKER> <USD> [--token USDT|U|USD1|USDC] --confirm
+// Sends a gift the way any other agent would: a standard x402 client paying with the Agentic Wallet
+// (`baw x402-payment`). POST /gifts → 402 → sign → the same POST again with PAYMENT-SIGNATURE → claim link.
+//   npm run cli -- b402-pay <SERVER_URL> <TICKER> <USD> [--to Ada] [--from "Payroll bot"] [--message "…"] [--token USDT] [--show-link] --confirm
 // Moves real funds when the server runs with LIVE_TRADING=true. Run only after approval in the conversation.
 import { runBaw } from "../baw/cli.js";
 
@@ -18,16 +18,24 @@ export async function b402PayCommand(args: string[]): Promise<void> {
   const [server, ticker, usdArg] = args;
   if (!server || !ticker || !usdArg) throw new Error("usage: npm run cli -- b402-pay <SERVER_URL> <TICKER> <USD> [--token USDT] --confirm");
   if (!args.includes("--confirm")) throw new Error("b402-pay signs a real payment: add --confirm (only after approval in the conversation)");
-  const ti = args.indexOf("--token");
-  const token = ti >= 0 ? args[ti + 1]?.toUpperCase() : undefined;
+  const opt = (name: string) => {
+    const i = args.indexOf(name);
+    return i >= 0 ? args[i + 1] : undefined;
+  };
+  const token = opt("--token")?.toUpperCase();
   const sender = process.env.AGENTIC_WALLET_ADDRESS;
   if (!sender) throw new Error("Missing env var AGENTIC_WALLET_ADDRESS");
 
-  const open = await fetch(`${server}/gifts`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ ticker, usd: Number(usdArg), senderAddress: sender, senderName: "Live test", recipientName: "Test recipient", message: "Phase 7 live payment test" }),
+  // The same body is sent twice: once to get the 402, once with the payment.
+  const giftBody = JSON.stringify({
+    ticker,
+    usd: Number(usdArg),
+    senderAddress: sender,
+    senderName: opt("--from") ?? "ShareSend test agent",
+    recipientName: opt("--to") ?? "Test recipient",
+    message: opt("--message") ?? "Sent by an agent over x402",
   });
+  const open = await fetch(`${server}/gifts`, { method: "POST", headers: { "content-type": "application/json" }, body: giftBody });
   const body: any = await open.json();
   if (open.status !== 402) throw new Error(`expected 402, got ${open.status}: ${JSON.stringify(body)}`);
   const header = open.headers.get("payment-required");
@@ -51,10 +59,15 @@ export async function b402PayCommand(args: string[]): Promise<void> {
     }
   }
 
-  // Replay right away: the signature is short-lived.
-  const paid = await fetch(`${server}/gifts/${body.gift.id}/pay`, { method: "POST", headers: { "PAYMENT-SIGNATURE": signed.paymentHeaderValue } });
+  // Replay right away (the signature is short-lived): the same request, now with the payment.
+  const paid = await fetch(`${server}/gifts`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "PAYMENT-SIGNATURE": signed.paymentHeaderValue },
+    body: giftBody,
+  });
   const pb: any = await paid.json();
   if (!paid.ok) throw new Error(`payment failed (${paid.status}): ${pb.error ?? JSON.stringify(pb)}`);
-  console.log(`PAID. settlement tx: ${pb.settleTx}${pb.settleTx ? `  https://bscscan.com/tx/${pb.settleTx}` : ""}`);
-  console.log(`gift status: ${pb.gift.status}${pb.claimUrl ? " — claim link issued (not printed; it's a secret)" : ""}`);
+  console.log(`PAID gift ${pb.gift.id}. settlement tx: ${pb.settleTx}${pb.settleTx ? `  https://bscscan.com/tx/${pb.settleTx}` : ""}`);
+  if (pb.claimUrl && args.includes("--show-link")) console.log(`claim link (a secret: give it only to the recipient): ${pb.claimUrl}`);
+  else console.log(`gift status: ${pb.gift.status}${pb.claimUrl ? " — claim link issued (add --show-link to print it; it's a secret)" : ""}`);
 }

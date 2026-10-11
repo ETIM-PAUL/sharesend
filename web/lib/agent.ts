@@ -13,7 +13,8 @@ export type GiftStatus =
   | "REFUNDED"
   | "FAILED"
   | "RETURNING"
-  | "RETURNED";
+  | "RETURNED"
+  | "POOLED";
 
 export interface PublicGift {
   id: string;
@@ -37,6 +38,10 @@ export interface PublicGift {
   /** A conditional order: buy only after a price drop, by a deadline. Null for an ordinary gift. */
   order: null | { dropPct: number; baseline: number; trigger: number; deadline: string; text: string | null; triggered: boolean; lastPrice: number | null; checkedAt: string | null };
   txs: Partial<Record<"payment" | "buy" | "vault" | "claim" | "return" | "refund", string>>;
+  /** "agent" when another agent paid for it directly over x402. */
+  channel?: "web" | "agent";
+  /** Group gifts: a contribution, or the group's pooled gift. */
+  group?: { id: string; role: "contribution" | "pool" } | null;
 }
 
 export interface QuoteWarning {
@@ -137,7 +142,7 @@ export const agent = {
     call<Draft>(`/gifts/${giftId}/pay/draft`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from, asset }) }),
 
   pay: (giftId: string, paymentHeader: string) =>
-    call<{ ok: true; gift: PublicGift; settleTx: string | null; claimUrl: string | null; alreadyPaid: boolean }>(`/gifts/${giftId}/pay`, {
+    call<{ ok: true; gift: PublicGift; settleTx: string | null; claimUrl: string | null; groupUrl?: string | null; alreadyPaid: boolean }>(`/gifts/${giftId}/pay`, {
       method: "POST",
       headers: { "PAYMENT-SIGNATURE": paymentHeader },
     }),
@@ -200,6 +205,14 @@ export interface ClaimViewData {
     claimError: string | null;
     claimAddress: string | null;
     claimTx: string | null;
+    /** What the recipient chose when claiming. */
+    claimAs: "stock" | "usdt" | null;
+    /** USDT received after cashing out, or null. */
+    cashedOutUsdt: number | null;
+    /** Why a cash-out ended as shares instead. */
+    payoutNote: string | null;
+    /** A group gift: everyone who chipped in. */
+    contributors: { name: string; note: string; usd: number; at: string }[];
     dryRun: boolean;
   };
   stock: StockCard | null;
@@ -226,11 +239,11 @@ export interface Holding {
 export const claimApi = {
   view: (id: string, code: string) =>
     call<ClaimViewData>(`/claims/${id}/view`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code }) }),
-  claim: (id: string, code: string, address: string) =>
+  claim: (id: string, code: string, address: string, claimAs: "stock" | "usdt" = "stock") =>
     call<{ ok: true; status: GiftStatus }>(`/claims/${id}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ code, address, confirmEligible: true }),
+      body: JSON.stringify({ code, address, confirmEligible: true, claimAs }),
     }),
   holdings: (address: string) => call<{ holdings: Holding[]; balancesAvailable: boolean }>(`/holdings/${address}`),
 };
@@ -254,6 +267,7 @@ export interface AgentStatus {
   session: null | { checkedAt: string; connected: boolean; sessionExpireTime?: string; inactiveSignOutTime?: string; activityExtended?: boolean | null };
   proof: null | { checkedAt: string; summary: string; ok: boolean; tokens?: { ticker: string; gifts: number; owedRaw: string; heldRaw: string; ok: boolean }[] };
   economics: { feesEarnedUsd: number; giftsWithFees: number; spentUsd: number; gasBnbWei: string; netUsd: number };
+  forAgents?: { giftsFromAgents: number; groupGiftsBought: number };
 }
 
 export const agentStatus = () => call<AgentStatus>("/agent/status");
@@ -297,4 +311,56 @@ export interface WalletBalances {
 
 export const walletApi = {
   balances: (address: string) => call<WalletBalances>(`/wallet/${address}`),
+};
+
+// ---- Group gifts ----
+
+export interface PublicGroup {
+  id: string;
+  status: "OPEN" | "POOLED" | "CANCELLED";
+  /** Past its closing time, waiting for the agent to buy or refund. */
+  closing: boolean;
+  organizerName: string;
+  organizerAddress: string;
+  recipientName: string;
+  message: string;
+  ticker: string;
+  companyName: string | null;
+  closesAt: string;
+  createdAt: string;
+  raisedUsd: number;
+  maxUsd: number;
+  roomUsd: number;
+  contributors: { name: string; note: string; usd: number; at: string }[];
+  pooledGift: { id: string; status: GiftStatus; usd: number } | null;
+  closeReason: string | null;
+  dryRun: boolean;
+}
+
+export type GroupActionName = "close" | "cancel";
+
+/** Must match agent/gifts/groups.ts exactly. */
+const GROUP_ACTION_TEXT: Record<GroupActionName, string> = {
+  close: "Close this group gift and buy it now",
+  cancel: "Cancel this group gift and refund everyone",
+};
+
+export function groupMessage(action: GroupActionName, groupId: string, isoTime: string): string {
+  return `ShareSend\n${GROUP_ACTION_TEXT[action]}\nGroup: ${groupId}\nTime: ${isoTime}`;
+}
+
+const json = (body: unknown): RequestInit => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+export const groupApi = {
+  create: (input: { ticker: string; organizerAddress: string; organizerName: string; recipientName: string; message: string; closesAt: string }) =>
+    call<{ ok: true; group: PublicGroup }>("/groups", json(input)).then((r) => r.group),
+  get: (id: string) => call<{ ok: true; group: PublicGroup }>(`/groups/${id}`).then((r) => r.group),
+  /** Opens a contribution: a 402 with what it accepts, paid like any gift. */
+  async contribute(id: string, input: { usd: number; senderAddress: string; senderName: string; note: string }) {
+    const r = await call<{ gift: PublicGift; accepts: PaymentRequirement[]; error?: string }>(`/groups/${id}/contributions`, json(input), [402]);
+    if (!r.accepts) throw new AgentError(r.error ?? "Couldn't start the payment", 400);
+    return r;
+  },
+  action: (id: string, action: GroupActionName, message: string, signature: string) =>
+    call<{ ok: true; group: PublicGroup; claimUrl?: string | null }>(`/groups/${id}/${action}`, json({ message, signature })),
 };

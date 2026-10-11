@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { decodeFunctionData, erc20Abi, maxUint256, recoverTypedDataAddress } from "viem";
+import { decodeFunctionData, erc20Abi, getAddress, maxUint256, recoverTypedDataAddress } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { buildAccepts, checkPayload, decodePaymentHeader, draftAuthorization, eip3009TypedData, encodeHeader, paymentPayloadFrom, permit2ApproveTx, permit2ExactTypedData, sameRequirements, signingRequest } from "./x402.js";
+import { buildAccepts, checkPayload, decodePaymentHeader, draftAuthorization, eip3009TypedData, encodeHeader, paymentPayloadFrom, payerOf, permit2ApproveTx, permit2ExactTypedData, sameRequirements, signingRequest } from "./x402.js";
 import type { PaymentPayload } from "./b402.js";
 import { ASSETS } from "./fixtures.js";
 
@@ -127,5 +127,17 @@ describe("browser signing requests", () => {
     expect(tx.to).toBe(accepts[0]!.asset);
     expect(d.functionName).toBe("approve");
     expect(d.args).toEqual(["0x000000000022D473030F116dDEE9F6B43aC78BA3", maxUint256]);
+  });
+});
+
+describe("payerOf", () => {
+  const from = "0x5e78822d6326360c51d746e164d878210e0febff";
+  it("reads the signer of an EIP-3009 or Permit2 payment, checksummed", () => {
+    expect(payerOf({ payload: { authorization: { from } } } as any)).toBe(getAddress(from));
+    expect(payerOf({ payload: { permit2Authorization: { from } } } as any)).toBe(getAddress(from));
+  });
+  it("is null without a valid address", () => {
+    expect(payerOf({ payload: { authorization: { from: "nope" } } } as any)).toBeNull();
+    expect(payerOf({ payload: {} } as any)).toBeNull();
   });
 });

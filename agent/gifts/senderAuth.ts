@@ -40,12 +40,29 @@ export async function verifySender(
   verify: SignatureVerifier,
   now = Date.now(),
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  return verifySigned(db, gift.senderAddress, (time) => senderMessage(action, gift.id, time), message, signature, verify, now, "this gift's sender");
+}
+
+/**
+ * Checks a signed action message: it must equal `expected(time)` for its own `Time:` line, be under 5 minutes old,
+ * be signed by `signer`, and not have been used before.
+ */
+export async function verifySigned(
+  db: Queryable,
+  signer: string,
+  expected: (isoTime: string) => string,
+  message: unknown,
+  signature: unknown,
+  verify: SignatureVerifier,
+  now: number,
+  who: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
   if (typeof message !== "string" || typeof signature !== "string" || !/^0x[0-9a-fA-F]+$/.test(signature)) return { ok: false, error: "message and signature required" };
   const time = /\nTime: (\S+)$/.exec(message)?.[1];
-  if (!time || message !== senderMessage(action, gift.id, time)) return { ok: false, error: "message doesn't match this action and gift" };
+  if (!time || message !== expected(time)) return { ok: false, error: "message doesn't match this action" };
   const at = Date.parse(time);
   if (!Number.isFinite(at) || Math.abs(now - at) > SENDER_MESSAGE_TTL_MS) return { ok: false, error: "signed message expired; sign again" };
-  if (!(await verify(gift.senderAddress, message, signature))) return { ok: false, error: "signature is not from this gift's sender" };
+  if (!(await verify(signer, message, signature))) return { ok: false, error: `signature is not from ${who}` };
   const hash = createHash("sha256").update(`${message}\n${signature.toLowerCase()}`).digest("hex");
   const r = await db.query("INSERT INTO used_signatures (hash) VALUES ($1) ON CONFLICT DO NOTHING", [hash]);
   if (!r.rowCount) return { ok: false, error: "this signature was already used; sign again" };

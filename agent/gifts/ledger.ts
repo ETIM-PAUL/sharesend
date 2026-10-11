@@ -49,9 +49,19 @@ export interface Gift {
   returnAs: ReturnAs;
   /** Set for a conditional order; null for a gift that is bought right away. */
   order: GiftOrder | null;
+  /** What the recipient chose at claim time: the shares, or USDT from selling them. */
+  claimAs: ClaimAs;
+  /** Created from the web app, or by another agent paying the x402 endpoint directly. */
+  channel: GiftChannel;
+  /** Group gifts: a contribution (paid by one person, never bought on its own) or the group's pooled gift. */
+  groupId: string | null;
+  groupRole: GroupRole | null;
 }
 
 export type ReturnAs = "stock" | "usdt";
+export type ClaimAs = "stock" | "usdt";
+export type GiftChannel = "web" | "agent";
+export type GroupRole = "contribution" | "pool";
 
 /** "Buy when the price per share is at or below `trigger`, by `deadline`; otherwise refund." */
 export interface GiftOrder {
@@ -155,6 +165,10 @@ function toGift(r: any): Gift {
             lastPrice: r.order_last_price === null || r.order_last_price === undefined ? null : Number(r.order_last_price),
             checkedAt: r.order_checked_at ?? null,
           },
+    claimAs: r.claim_as ?? "stock",
+    channel: r.channel ?? "web",
+    groupId: r.group_id ?? null,
+    groupRole: r.group_role ?? null,
   };
 }
 
@@ -179,6 +193,9 @@ export interface NewGift {
   returnAs?: ReturnAs;
   /** Buy only when the price drops by `dropPct` from `baseline` (price per share now), by `deadline`. */
   order?: { dropPct: number; baseline: number; deadline: Date; text?: string };
+  channel?: GiftChannel;
+  /** A contribution to an open group gift. */
+  groupId?: string;
 }
 
 export interface GiftCaps {
@@ -199,6 +216,8 @@ export async function dailyUsedUsd(db: Queryable): Promise<number> {
     `SELECT coalesce(sum(usd_cost), 0) AS used FROM gifts
      WHERE created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
        AND status NOT IN ('EXPIRED', 'REFUNDED') AND NOT dry_run
+       -- A group's pooled gift is paid by its contributions, which are already counted.
+       AND group_role IS DISTINCT FROM 'pool'
        -- An unpaid gift stops counting once its payment window has passed.
        AND NOT (status = 'AWAITING_PAYMENT' AND payment_expires_at <= now())`,
   );
@@ -239,8 +258,8 @@ export async function createGift(db: Db, input: NewGift, caps: GiftCaps): Promis
     const { rows } = await c.query(
       `INSERT INTO gifts (id, status, sender_address, sender_name, recipient_name, message, ticker, issuer,
          token_address, token_decimals, quoted_token_amount, usd_cost, fee_usd, quote_id, claim_code_hash, payment_expires_at, dry_run, payment_requirements, return_as,
-         order_drop_pct, order_baseline, order_trigger, order_deadline, order_text)
-       VALUES ($1, 'AWAITING_PAYMENT', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+         order_drop_pct, order_baseline, order_trigger, order_deadline, order_text, channel, group_id, group_role)
+       VALUES ($1, 'AWAITING_PAYMENT', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
        RETURNING *`,
       [
         randomUUID(),
@@ -266,6 +285,9 @@ export async function createGift(db: Db, input: NewGift, caps: GiftCaps): Promis
         input.order ? triggerPrice(input.order.baseline, input.order.dropPct) : null,
         input.order?.deadline ?? null,
         input.order?.text ? input.order.text.slice(0, 400) : null,
+        input.channel === "agent" ? "agent" : "web",
+        input.groupId ?? null,
+        input.groupId ? "contribution" : null,
       ],
     );
     const gift = toGift(rows[0]);
@@ -296,10 +318,12 @@ export async function setReturnAs(db: Queryable, id: string, choice: ReturnAs): 
   return (r.rowCount ?? 0) > 0;
 }
 
-/** Gifts claimed (or being claimed) to an address, oldest first. */
+/** Gifts claimed (or being claimed) to an address as shares, oldest first. Gifts cashed out to USDT aren't holdings. */
 export async function giftsClaimedBy(db: Queryable, address: string): Promise<Gift[]> {
   const { rows } = await db.query(
-    "SELECT * FROM gifts WHERE lower(claim_address) = lower($1) AND status IN ('CLAIMING', 'CLAIMED') ORDER BY coalesce(claimed_at, updated_at)",
+    `SELECT * FROM gifts g WHERE lower(claim_address) = lower($1) AND status IN ('CLAIMING', 'CLAIMED')
+       AND (claim_as = 'stock' OR (status = 'CLAIMED' AND NOT EXISTS (SELECT 1 FROM exec_records e WHERE e.gift_id = g.id AND e.kind = 'cashout')))
+     ORDER BY coalesce(claimed_at, updated_at)`,
     [address],
   );
   return rows.map(toGift);
@@ -320,6 +344,7 @@ export interface GiftPatch {
   refundTx?: string;
   failureReason?: string | null;
   claimExpiresAt?: Date;
+  claimAs?: ClaimAs;
 }
 
 const PATCH_COLUMNS: Record<keyof GiftPatch, string> = {
@@ -334,6 +359,7 @@ const PATCH_COLUMNS: Record<keyof GiftPatch, string> = {
   refundTx: "refund_tx",
   failureReason: "failure_reason",
   claimExpiresAt: "claim_expires_at",
+  claimAs: "claim_as",
 };
 
 const ARRIVAL_TIMESTAMP: Partial<Record<GiftStatus, string>> = {
@@ -364,7 +390,8 @@ export interface TransitionOpts {
   detail?: Record<string, unknown>;
 }
 
-async function transitionOn(c: Queryable, id: string, from: GiftStatus, to: GiftStatus, patch: GiftPatch, opts: TransitionOpts): Promise<Gift> {
+/** transition() inside a caller's transaction. */
+export async function transitionOn(c: Queryable, id: string, from: GiftStatus, to: GiftStatus, patch: GiftPatch = {}, opts: TransitionOpts = {}): Promise<Gift> {
   if (!canTransition(from, to)) throw new IllegalTransitionError(from, to);
   const params: unknown[] = [id, from, to];
   const sets = ["status = $3", "updated_at = now()", ...patchSql(patch, params)];
@@ -468,6 +495,8 @@ export interface ClaimRequest {
   ip: string;
   /** Addresses that must never receive a claim (the vault, the Agentic Wallet). */
   forbiddenAddresses?: string[];
+  /** Take the shares (default), or have them sold and get USDT. */
+  claimAs?: ClaimAs;
 }
 
 function whyNotClaimable(g: Gift, now: Date): ClaimFailure {
@@ -530,7 +559,7 @@ export async function beginClaim(db: Db, req: ClaimRequest, limits: ClaimRateLim
   if (forbidden.includes(to.toLowerCase())) return { ok: false, reason: "BAD_ADDRESS" };
 
   try {
-    const claimed = await transition(db, gift.id, "READY", "CLAIMING", { claimAddress: to }, { guard: "claim_expires_at > now()" });
+    const claimed = await transition(db, gift.id, "READY", "CLAIMING", { claimAddress: to, claimAs: req.claimAs === "usdt" ? "usdt" : "stock" }, { guard: "claim_expires_at > now()" });
     await recordAttempt(db, ipHash, gift.id, true);
     return { ok: true, gift: claimed };
   } catch (e) {

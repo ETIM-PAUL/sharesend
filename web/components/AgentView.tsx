@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { agentStatus, type AgentStatus } from "@/lib/agent";
+import { AGENT_URL, agentStatus, type AgentStatus } from "@/lib/agent";
 import { ago, shortAddr, usd } from "@/lib/format";
 import { Notice } from "./ui";
 
@@ -122,6 +122,26 @@ export function AgentView() {
           </div>
         </div>
         <p className="mt-1 text-xs text-ink-soft">Each gift carries a small fee, paid through B402 into the vault.</p>
+      </section>
+
+      <section>
+        <h2 className="numerals mb-2 text-xl font-bold text-ink">Other agents can send gifts too</h2>
+        <p className="text-[0.95rem] text-ink">
+          Any agent with a wallet can pay ShareSend over x402 (B402) and get a claim link to pass on: a payroll bot, a rewards system, or another Binance Agentic Wallet. The endpoint is listed in the agent&apos;s on-chain identity.
+        </p>
+        {s.forAgents ? (
+          <p className="mt-1 text-sm text-ink-soft">
+            {s.forAgents.giftsFromAgents} {s.forAgents.giftsFromAgents === 1 ? "gift" : "gifts"} sent by other agents · {s.forAgents.groupGiftsBought} group {s.forAgents.groupGiftsBought === 1 ? "gift" : "gifts"} bought
+          </p>
+        ) : null}
+        <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-sm">
+          <a className="text-engrave underline underline-offset-4" href={`${AGENT_URL}/skill.md`} target="_blank" rel="noopener noreferrer">
+            How to call it (skill)
+          </a>
+          <a className="text-engrave underline underline-offset-4" href={`${AGENT_URL}/.well-known/agent-card.json`} target="_blank" rel="noopener noreferrer">
+            Agent card (JSON)
+          </a>
+        </div>
       </section>
 
       {!s.agent.liveTrading ? <p className="text-xs text-ink-soft">Test mode: no real money or stock moves on this server.</p> : null}

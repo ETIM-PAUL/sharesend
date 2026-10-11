@@ -142,6 +142,8 @@ export async function runBuy(d: ExecDeps, giftId: string): Promise<ExecOutcome> 
   let g = await getGift(d.db, giftId);
   if (!g) throw new Error(`Gift ${giftId} not found`);
   if (g.dryRun === d.cfg.liveTrading) throw new Error(`Gift ${giftId} is ${g.dryRun ? "a dry run" : "live"} but LIVE_TRADING=${d.cfg.liveTrading}`);
+  // A group contribution is never bought on its own: its money is pooled into the group's gift when the group closes.
+  if (g.groupRole === "contribution") return { status: "NOOP", gift: g };
 
   if (g.status === "PAID") {
     // Caps are enforced at creation; re-checked here because this is where money moves.
