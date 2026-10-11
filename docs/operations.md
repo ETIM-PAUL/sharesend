@@ -28,6 +28,7 @@ The jobs run on the agent service. Each run is recorded in `job_runs` and shown 
 | expire-unpaid | 1 min | Closes unpaid gifts once their price hold ends. A gift mid-settlement is never touched. |
 | expiry-returns | 10 min | When a claim window ends, sends the stock back to the sender. |
 | resume-payouts | 2 min | Finishes claims and refunds that were interrupted. |
+| price-watch | 1 min | Checks the live price for orders waiting on a price drop; buys at the trigger, refunds at the deadline. Needs no `baw`. |
 | buy-queue | 1 min | Buys stock for paid gifts, one at a time. Needs `baw`. |
 | reconcile | 15 min | Checks vault holdings against what unclaimed gifts are owed. Alerts if short. |
 | keepalive | `KEEPALIVE_MINUTES` | Checks the Agentic Wallet session. Alerts on sign-out and 12 hours before it ends. Records whether the check extended the inactivity timer. |

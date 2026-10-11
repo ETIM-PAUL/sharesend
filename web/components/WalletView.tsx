@@ -136,7 +136,10 @@ export function WalletView() {
 
       {noGas ? (
         <Notice>
-          This wallet has no BNB for network fees, so it can&apos;t send anything yet. To send tokens out, first add about {gasUsd ? usd(Math.max(gasUsd, 0.01)) : "a few cents"} of BNB ({formatUnits(minGas, 18)}) to the address below. Receiving needs nothing.
+          {data && BigInt(data.bnb.raw) > 0n
+            ? <>This wallet has {shortAmount(BigInt(data.bnb.raw), 18)} BNB, which is just under the {formatUnits(minGas, 18)} it needs for network fees, so it can&apos;t send anything yet. Add a little more BNB (about {gasUsd ? usd(Math.max(gasUsd, 0.01)) : "a few cents"}) to the address below.</>
+            : <>This wallet has no BNB for network fees, so it can&apos;t send anything yet. To send tokens out, first add about {gasUsd ? usd(Math.max(gasUsd, 0.01)) : "a few cents"} of BNB ({formatUnits(minGas, 18)}) to the address below.</>}{" "}
+          Receiving needs nothing.
         </Notice>
       ) : null}
 

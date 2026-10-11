@@ -1,6 +1,6 @@
 # Issuer findings (Phase 2)
 
-Checked 2026-10-06 against BSC mainnet (read-only: RWA Data API, public RPC, `eth_call` simulations, `baw` quotes). **No funds spent.** The live steps (real buy, send to vault, vault payout) are still pending; see "Still to prove" at the bottom.
+Checked 2026-10-06 against BSC mainnet (read-only: RWA Data API, public RPC, `eth_call` simulations, `baw` quotes), then proven with real funds on 2026-10-10/11; see "Proven live" at the bottom and `docs/demo-proof.md` for every transaction.
 
 ## Which issuers exist on BSC
 
@@ -65,9 +65,14 @@ In `GET /api/v1/dex/market/rwa/tokens`, `tokenPrice ÷ tokenToShareRatio` equals
 
 bStocks also has a UI multiplier (`uiMultiplier`, `balanceOfUI`, `toUIAmount`): the displayed balance differs from the raw ERC-20 balance by the tokens-per-share ratio. Show recipients the UI amount (or shares), not the raw balance.
 
-## Still to prove (needs ~$3 of mainnet funds)
+## Proven live
 
-1. Agentic Wallet buys $1 of a bStocks token (`baw market-order swap`), e.g. NVDAB.
-2. Agentic Wallet sends it to the vault (`baw wallet send`), proving the address-book entry. Check `baw wallet tx-lock` for phone confirmations.
-3. Vault transfers it to a brand-new address.
-4. Record the three tx links here.
+Run on BSC mainnet with $1 gifts of NVDAB (bStocks); every transaction is linked in [`demo-proof.md`](demo-proof.md):
+
+1. The Agentic Wallet bought the stock (`baw market-order swap`, USDT → NVDAB).
+2. The Agentic Wallet sent it to the vault (`baw wallet send`). `baw` only sends to address-book entries, so this also proves the vault is in the address book.
+3. The vault paid it out to the recipient's wallet (a claim), and, for a cancelled gift, sold-back stock was returned to the sender as USDT.
+
+Findings that came out of it (see [`dx-log.md`](dx-log.md)): the Agentic Wallet's session is encrypted with a machine-derived key, so a hosted service needs `BINANCE_INSTANCE_ID`; and a swap can fail with "Insufficient balance" after the order is accepted, which the pipeline turns into a full refund.
+
+Not covered by these runs: Ondo tokens (which need more than $5 per gift) were quoted but not bought live.
