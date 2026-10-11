@@ -56,6 +56,7 @@ class FakeWallet implements AgenticWalletPort {
   sellRefused = false;
   sellQuoteThrows = false;
   crashAfterSell = false;
+  returnGhostSellId = false; // submitSell returns an id market-order list doesn't know
   sellCalls = 0;
   sells = new Map<string, { status: "FINISHED" | "FAILED"; txHash: string | null; fromToken: string; at: number }>();
   constructor(private chain: FakeChain) {}
@@ -74,7 +75,7 @@ class FakeWallet implements AgenticWalletPort {
       this.crashAfterSell = false;
       throw new Error("process crashed after submitting the sell");
     }
-    return id;
+    return this.returnGhostSellId ? `ghost-${id}` : id;
   }
   async findSellSince(fromToken: string, since: number) {
     for (const [id, o] of this.sells) if (o.fromToken === fromToken && o.at >= since && o.status !== "FAILED") return id;
@@ -570,6 +571,17 @@ describe.skipIf(!url)("execution pipeline (Postgres + fakes)", () => {
       expect(wallet.sellCalls).toBe(1);
       expect(wallet.sends.map((x) => x.token)).toEqual([TOKEN, USDT]); // buy→vault, then proceeds→vault
       expect(await records(id)).toMatchObject({ to_wallet: "confirmed", sell: "confirmed", proceeds: "confirmed", cashout: "confirmed" });
+    });
+
+    it("adopts the real sell order when the id the CLI returned isn't in market-order list", async () => {
+      const id = await readyUsdtGift();
+      wallet.returnGhostSellId = true;
+      const r = await returnGift(d, id);
+      expect(r.status).toBe("RETURNED");
+      expect(wallet.sellCalls).toBe(1);
+      expect(backend.signed.at(-1)).toMatchObject({ token: USDT, to: SENDER, amount: SELL });
+      const rec = (await db.query("SELECT ref FROM exec_records WHERE gift_id = $1 AND kind = 'sell'", [id])).rows[0];
+      expect(rec.ref).toBe("sell-1");
     });
 
     it("pays out exactly what the sale returned", async () => {
