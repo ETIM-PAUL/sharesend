@@ -3,11 +3,12 @@
 //   POST /claims/:id/view   {code}                              → the gift card, stock profile and value
 //   POST /claims/:id        {code, address, confirmEligible, claimAs?}  → READY → CLAIMING, payout runs in the background
 //                           claimAs "usdt": the shares are sold and the recipient gets USDT (or the shares, if they can't be sold now)
+//   POST /claims/:id/thanks {code, note}                        → the recipient's one-time thank-you (after claiming; never editable)
 //   GET  /holdings/:address                                      → stock received through ShareSend, with value now
 import { Hono, type Context } from "hono";
 import { isAddress } from "viem";
 import { getDb } from "../db/pool.js";
-import { beginClaim, giftsClaimedBy, verifyClaimCode, type ClaimFailure, type Gift } from "../gifts/ledger.js";
+import { beginClaim, cleanThanks, giftsClaimedBy, leaveThanks, MAX_THANKS_CHARS, verifyClaimCode, type ClaimFailure, type Gift } from "../gifts/ledger.js";
 import { advanceInBackground } from "../execution/advance.js";
 import { sharesOf, stockInfo, valuation, type StockInfo } from "../claims/stock.js";
 import { rawBalances } from "../binance/wallet.js";
@@ -109,6 +110,8 @@ claims.post("/claims/:id/view", async (c) => {
       payoutNote: g.status === "CLAIMED" && g.claimAs === "usdt" ? g.failureReason : null,
       // A group gift: everyone who chipped in (names and notes only).
       contributors,
+      // The recipient's one-time thank-you, once they've left it.
+      thanks: g.thanksNote ? { note: g.thanksNote, at: g.thankedAt } : null,
       // "agent" when another agent paid for it over x402.
       channel: g.channel,
       dryRun: g.dryRun,
@@ -141,6 +144,24 @@ claims.post("/claims/:id", async (c) => {
   // The vault transfer needs no Binance session, so claims work even while the Agentic Wallet is signed out.
   advanceInBackground(db, r.gift.id);
   return c.json({ ok: true, status: r.gift.status }, 202);
+});
+
+claims.post("/claims/:id/thanks", async (c) => {
+  const db = db503();
+  if (!db) return c.json({ ok: false, error: "database not configured" }, 503);
+  const body = (await c.req.json().catch(() => null)) as { code?: unknown; note?: unknown } | null;
+  // The claim code proves this is the person the link was sent to, and it's rate-limited like a claim.
+  const checked = await verifyClaimCode(db, c.req.param("id"), typeof body?.code === "string" ? body.code : "", clientIp(c));
+  if (!checked.ok) {
+    const e = CLAIM_ERRORS[checked.reason];
+    return c.json({ ok: false, reason: checked.reason, error: e.message }, e.status);
+  }
+  const note = cleanThanks(body?.note);
+  if (!note) return c.json({ ok: false, error: `Write a short thank-you, up to ${MAX_THANKS_CHARS} characters.` }, 400);
+  const r = await leaveThanks(db, checked.gift.id, note);
+  if (r === "ALREADY_THANKED") return c.json({ ok: false, reason: r, error: "You've already said thank you. A thank-you can only be sent once." }, 409);
+  if (r === "NOT_CLAIMED") return c.json({ ok: false, reason: r, error: "You can say thank you once the gift is in your wallet." }, 409);
+  return c.json({ ok: true, thanks: { note, at: new Date() } }, 201);
 });
 
 claims.get("/holdings/:address", async (c) => {

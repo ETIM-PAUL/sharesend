@@ -7,10 +7,12 @@ import {
   advanceStep,
   beginClaim,
   CapExceededError,
+  cleanThanks,
   completeClaim,
   createGift,
   getGift,
   IllegalTransitionError,
+  leaveThanks,
   releaseClaim,
   StaleStateError,
   transition,
@@ -265,6 +267,51 @@ describe.skipIf(!url)("gift ledger (Postgres)", () => {
     });
   });
 
+  describe("thank-you note", () => {
+    async function claimedGift() {
+      const { gift, claimCode } = await readyGift();
+      const claimed = await beginClaim(db, { giftId: gift.id, code: claimCode, claimAddress: addr(), ip: ip() });
+      if (!claimed.ok) throw new Error("claim failed");
+      await completeClaim(db, gift.id, "0xclaim");
+      return gift.id;
+    }
+
+    it("saves a note once the gift is claimed, and shows it on the gift", async () => {
+      const id = await claimedGift();
+      expect(await leaveThanks(db, id, "Thank you, this made my week!")).toBe("SAVED");
+      const g = await getGift(db, id);
+      expect(g!.thanksNote).toBe("Thank you, this made my week!");
+      expect(g!.thankedAt).toBeInstanceOf(Date);
+    });
+
+    it("can only be sent once and never overwritten", async () => {
+      const id = await claimedGift();
+      expect(await leaveThanks(db, id, "First")).toBe("SAVED");
+      expect(await leaveThanks(db, id, "Second")).toBe("ALREADY_THANKED");
+      expect((await getGift(db, id))!.thanksNote).toBe("First");
+    });
+
+    it("lets exactly one of many simultaneous requests win", async () => {
+      const id = await claimedGift();
+      const results = await Promise.all(Array.from({ length: 8 }, (_, i) => leaveThanks(db, id, `note ${i}`)));
+      expect(results.filter((r) => r === "SAVED")).toHaveLength(1);
+      expect(results.filter((r) => r === "ALREADY_THANKED")).toHaveLength(7);
+    });
+
+    it("is refused before the gift is claimed", async () => {
+      const { gift } = await readyGift();
+      expect(await leaveThanks(db, gift.id, "Early!")).toBe("NOT_CLAIMED");
+      expect((await getGift(db, gift.id))!.thanksNote).toBeNull();
+    });
+
+    it("the database rejects a note that is empty or too long", async () => {
+      const id = await claimedGift();
+      await expect(db.query("UPDATE gifts SET thanks_note = '', thanked_at = now() WHERE id = $1", [id])).rejects.toThrow();
+      await expect(db.query("UPDATE gifts SET thanks_note = $2, thanked_at = now() WHERE id = $1", [id, "x".repeat(281)])).rejects.toThrow();
+      await expect(db.query("UPDATE gifts SET thanks_note = 'hi' WHERE id = $1", [id])).rejects.toThrow();
+    });
+  });
+
   describe("reconciliation", () => {
     it("compares vault holdings per token with unclaimed gifts", async () => {
       await db.query("TRUNCATE gifts, gift_events, claim_attempts CASCADE");
@@ -286,5 +333,26 @@ describe.skipIf(!url)("gift ledger (Postgres)", () => {
       ]);
       expect(r.ok).toBe(false);
     });
+  });
+});
+
+describe("cleanThanks", () => {
+  it("trims, keeps normal text and line breaks, and strips control characters", () => {
+    expect(cleanThanks("  Thank you!  ")).toBe("Thank you!");
+    expect(cleanThanks("Thanks\nso much")).toBe("Thanks\nso much");
+    expect(cleanThanks("Hi\u0000\u0007 there")).toBe("Hi there");
+  });
+
+  it("rejects empty, blank, non-text and over-long notes", () => {
+    expect(cleanThanks("")).toBeNull();
+    expect(cleanThanks("   \n ")).toBeNull();
+    expect(cleanThanks(42)).toBeNull();
+    expect(cleanThanks(null)).toBeNull();
+    expect(cleanThanks("x".repeat(281))).toBeNull();
+  });
+
+  it("counts characters, not bytes, so 280 emoji are allowed", () => {
+    expect(cleanThanks("🎁".repeat(280))).not.toBeNull();
+    expect(cleanThanks("🎁".repeat(281))).toBeNull();
   });
 });

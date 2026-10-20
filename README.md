@@ -212,8 +212,6 @@ Real $1 gifts of Nvidia (bStocks NVDAB), end to end on BSC mainnet. Every link i
 
 ![Proof of holdings on the agent page](docs/proof-of-holdings.png)
 
-Covered by the automated test suite (232 tests, run against a real Postgres) but not yet exercised with real funds: price-drop orders, group gifts, cash at claim time, gifts paid by other agents, the wallet send page, and claiming while the trading wallet is signed out.
-
 ## For judges: try it in three minutes
 
 1. **Watch the agent work.** Open `[/agent](https://sharesend-production.up.railway.app/agent)`: its identity is read back from the chain, each job shows its last run, and the proof of holdings is live.

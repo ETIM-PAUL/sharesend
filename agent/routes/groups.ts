@@ -68,6 +68,8 @@ async function publicGroup(db: ReturnType<typeof getDb>, g: Group) {
     roomUsd: Math.max(0, Math.round((config.maxGiftUsd - committed) * 100) / 100),
     contributors: contributors.map((x) => ({ name: x.name, note: x.note, usd: x.usd, at: x.at })),
     pooledGift: pool ? { id: pool.id, status: pool.status, usd: pool.usdCost } : null,
+    // The recipient's one-time thank-you to everyone who chipped in, once they've left it.
+    thanks: pool?.thanksNote ? { note: pool.thanksNote, at: pool.thankedAt } : null,
     closeReason: g.closeReason,
     dryRun: g.dryRun,
   };

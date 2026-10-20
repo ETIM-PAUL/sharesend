@@ -28,13 +28,17 @@ export function SentList() {
   const hydrated = useHydrated();
   const gifts = hydrated ? listSent() : null;
   const [status, setStatus] = useState<Record<string, string>>({});
+  const [thanked, setThanked] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (!hydrated) return;
     listSent().forEach((g) =>
       agent
         .gift(g.id)
-        .then((x) => setStatus((s) => ({ ...s, [g.id]: x.status === "PAID" && x.order && !x.order.triggered ? "WAITING_PRICE" : x.status })))
+        .then((x) => {
+          setStatus((s) => ({ ...s, [g.id]: x.status === "PAID" && x.order && !x.order.triggered ? "WAITING_PRICE" : x.status }));
+          if (x.thanks) setThanked((t) => ({ ...t, [g.id]: true }));
+        })
         .catch(() => {}),
     );
   }, [hydrated]);
@@ -68,6 +72,7 @@ export function SentList() {
               <div className="text-right">
                 <p className="numerals text-ink">{usd(g.usd)}</p>
                 <p className="text-sm text-ink-soft">{status[g.id] ? LABEL[status[g.id]!] ?? status[g.id] : "…"}</p>
+                {thanked[g.id] ? <p className="text-sm text-engrave">{g.recipientName} left you a note</p> : null}
               </div>
             </Link>
           </li>

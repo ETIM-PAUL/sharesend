@@ -56,6 +56,9 @@ export interface Gift {
   /** Group gifts: a contribution (paid by one person, never bought on its own) or the group's pooled gift. */
   groupId: string | null;
   groupRole: GroupRole | null;
+  /** The recipient's one-time thank-you, set once after claiming and never changed. */
+  thanksNote: string | null;
+  thankedAt: Date | null;
 }
 
 export type ReturnAs = "stock" | "usdt";
@@ -169,6 +172,8 @@ function toGift(r: any): Gift {
     channel: r.channel ?? "web",
     groupId: r.group_id ?? null,
     groupRole: r.group_role ?? null,
+    thanksNote: r.thanks_note ?? null,
+    thankedAt: r.thanked_at ?? null,
   };
 }
 
@@ -567,6 +572,30 @@ export async function beginClaim(db: Db, req: ClaimRequest, limits: ClaimRateLim
     const cur = await getGift(db, gift.id);
     return { ok: false, reason: cur ? whyNotClaimable(cur, new Date()) : "INVALID" };
   }
+}
+
+export const MAX_THANKS_CHARS = 280;
+
+/** Trims, strips control characters and checks the length (in characters, so emoji count once). Null if unusable. */
+export function cleanThanks(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const note = raw.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").trim();
+  const length = [...note].length;
+  return length >= 1 && length <= MAX_THANKS_CHARS ? note : null;
+}
+
+/**
+ * Saves the recipient's thank-you. Allowed once, and only after the gift is claimed: the single UPDATE is the whole
+ * check, so two racing requests can't both win and nothing can overwrite a note that's already there.
+ */
+export async function leaveThanks(db: Queryable, id: string, note: string): Promise<"SAVED" | "ALREADY_THANKED" | "NOT_CLAIMED"> {
+  const r = await db.query(
+    "UPDATE gifts SET thanks_note = $2, thanked_at = now(), updated_at = now() WHERE id = $1 AND status = 'CLAIMED' AND thanks_note IS NULL",
+    [id, note],
+  );
+  if ((r.rowCount ?? 0) > 0) return "SAVED";
+  const cur = await getGift(db, id);
+  return cur?.thanksNote ? "ALREADY_THANKED" : "NOT_CLAIMED";
 }
 
 export function completeClaim(db: Db, id: string, claimTx: string): Promise<Gift> {

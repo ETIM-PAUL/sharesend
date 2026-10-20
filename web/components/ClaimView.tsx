@@ -4,12 +4,12 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { usePrivy, useWallets } from "@privy-io/react-auth";
-import { AgentError, claimApi, type ClaimViewData } from "@/lib/agent";
+import { AgentError, claimApi, MAX_THANKS_CHARS, type ClaimViewData } from "@/lib/agent";
 import { shortAddr, usd } from "@/lib/format";
 import { useHydrated } from "@/lib/useHydrated";
 import { Certificate } from "./Certificate";
 import { Sparkline } from "./Sparkline";
-import { Button, Input, Notice } from "./ui";
+import { Button, Input, Notice, TextArea } from "./ui";
 
 const codeKey = (id: string) => `sharesend:claim:${id}`;
 
@@ -103,9 +103,61 @@ export function ClaimView() {
 
       <ClaimPanel id={id} code={code!} data={data} onClaimed={(st) => setData({ ...data, gift: { ...g, status: st } })} />
 
+      {g.status === "CLAIMED" ? <ThankYou id={id} code={code!} gift={g} onSent={(thanks) => setData({ ...data, gift: { ...g, thanks } })} /> : null}
+
       <Explainer data={data} />
       {g.dryRun ? <p className="text-xs text-ink-soft">Test gift: no real money or stock moves.</p> : null}
     </div>
+  );
+}
+
+/** After claiming: one thank-you to the sender (or everyone who chipped in). It can be sent once and never changed. */
+function ThankYou({ id, code, gift: g, onSent }: { id: string; code: string; gift: ClaimViewData["gift"]; onSent: (t: NonNullable<ClaimViewData["gift"]["thanks"]>) => void }) {
+  const group = g.contributors.length > 1;
+  const to = group ? "everyone who chipped in" : g.senderName;
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (g.thanks)
+    return (
+      <section className="space-y-2">
+        <h2 className="text-sm font-medium text-ink-soft">Your thank-you to {to}</h2>
+        <blockquote className="whitespace-pre-line rounded-[10px] bg-sheet px-3.5 py-3 text-[0.95rem] italic text-ink">{g.thanks.note}</blockquote>
+      </section>
+    );
+
+  async function send() {
+    setBusy(true);
+    setError(null);
+    try {
+      onSent(await claimApi.thank(id, code, note.trim()));
+    } catch (e) {
+      setError(e instanceof AgentError ? e.message : (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form
+      className="space-y-3 border-t border-rule pt-5"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (note.trim()) send();
+      }}
+    >
+      <h2 className="numerals text-xl font-bold text-ink">Say thank you</h2>
+      <label className="block">
+        <span className="mb-1.5 block text-sm font-medium text-ink">A note for {to}</span>
+        <TextArea value={note} onChange={(e) => setNote(e.target.value)} placeholder="This made my day. Thank you!" maxLength={MAX_THANKS_CHARS} />
+        <span className="mt-1 block text-xs text-ink-soft">You can send one thank-you, and it can&apos;t be changed after. {MAX_THANKS_CHARS - [...note].length} characters left.</span>
+      </label>
+      {error ? <Notice kind="error">{error}</Notice> : null}
+      <Button type="submit" disabled={busy || !note.trim()}>
+        {busy ? "Sending…" : "Send thank-you (one time only)"}
+      </Button>
+    </form>
   );
 }
 

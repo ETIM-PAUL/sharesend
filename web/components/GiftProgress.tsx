@@ -19,7 +19,12 @@ export function useGift(id: string, initial?: PublicGift) {
         if (stop) return;
         setGift(g);
         setError(null);
-        if (TERMINAL.has(g.status)) return;
+        // A claimed gift keeps being checked, slowly, until the recipient's thank-you arrives.
+        if (TERMINAL.has(g.status) && !(g.status === "CLAIMED" && !g.thanks)) return;
+        if (g.status === "CLAIMED") {
+          timer = setTimeout(tick, 30_000);
+          return;
+        }
       } catch (e) {
         if (!stop) setError((e as Error).message);
       }

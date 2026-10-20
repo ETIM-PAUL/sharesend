@@ -12,6 +12,7 @@ import { getSent, type SentGift } from "@/lib/sent";
 import { useHydrated } from "@/lib/useHydrated";
 import { GiftProgress, useGift } from "./GiftProgress";
 import { ShareCard } from "./ShareCard";
+import { ThanksCard } from "./ThanksCard";
 import { Button, Notice } from "./ui";
 import { ReturnChoice, type ReturnAs } from "./ReturnChoice";
 
@@ -47,6 +48,7 @@ export function SentGiftView() {
           </p>
         ) : null}
       </div>
+      {gift.thanks ? <ThanksCard from={gift.recipientName} thanks={gift.thanks} /> : null}
       <GiftProgress gift={gift} />
       <SenderActions gift={gift} local={local} onChange={setGift} />
       <Link href="/sent" className="block text-sm text-engrave underline underline-offset-4">

@@ -12,6 +12,7 @@ import { getSenderName, saveSenderName, saveSent } from "@/lib/sent";
 import { useHydrated } from "@/lib/useHydrated";
 import { PayPanel } from "./PayPanel";
 import { ShareCard } from "./ShareCard";
+import { ThanksCard } from "./ThanksCard";
 import { Button, Field, Input, Notice, TextArea } from "./ui";
 
 const CHIP_IN = [1, 2, 5];
@@ -120,6 +121,7 @@ function Outcome({ group, claimUrl }: { group: PublicGroup; claimUrl: string | n
         Bought together: {usd(group.pooledGift.usd)} of {group.ticker} for {group.recipientName}. {claimUrl ? "" : `${group.organizerName} has the link to send to ${group.recipientName}.`}
       </Notice>
       {claimUrl ? <ShareCard url={claimUrl} recipientName={group.recipientName} amountUsd={group.pooledGift.usd} companyName={group.companyName ?? group.ticker} message={group.message} /> : null}
+      {group.thanks ? <ThanksCard from={group.recipientName} thanks={group.thanks} /> : null}
     </section>
   );
 }

@@ -42,7 +42,16 @@ export interface PublicGift {
   channel?: "web" | "agent";
   /** Group gifts: a contribution, or the group's pooled gift. */
   group?: { id: string; role: "contribution" | "pool" } | null;
+  /** The recipient's one-time thank-you, once they've left it. */
+  thanks?: Thanks | null;
 }
+
+export interface Thanks {
+  note: string;
+  at: string;
+}
+
+export const MAX_THANKS_CHARS = 280;
 
 export interface QuoteWarning {
   code: "WEEKEND_PREMIUM" | "REFERENCE_MISMATCH";
@@ -213,6 +222,8 @@ export interface ClaimViewData {
     payoutNote: string | null;
     /** A group gift: everyone who chipped in. */
     contributors: { name: string; note: string; usd: number; at: string }[];
+    /** The recipient's one-time thank-you, once they've left it. */
+    thanks: Thanks | null;
     /** "agent" when another agent paid for it over x402. */
     channel?: "web" | "agent";
     dryRun: boolean;
@@ -247,6 +258,9 @@ export const claimApi = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ code, address, confirmEligible: true, claimAs }),
     }),
+  /** The one-time thank-you. The agent refuses a second one. */
+  thank: (id: string, code: string, note: string) =>
+    call<{ ok: true; thanks: Thanks }>(`/claims/${id}/thanks`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, note }) }).then((r) => r.thanks),
   holdings: (address: string) => call<{ holdings: Holding[]; balancesAvailable: boolean }>(`/holdings/${address}`),
 };
 
@@ -337,6 +351,8 @@ export interface PublicGroup {
   roomUsd: number;
   contributors: { name: string; note: string; usd: number; at: string }[];
   pooledGift: { id: string; status: GiftStatus; usd: number } | null;
+  /** The recipient's one-time thank-you to everyone who chipped in. */
+  thanks: Thanks | null;
   closeReason: string | null;
   dryRun: boolean;
 }

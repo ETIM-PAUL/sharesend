@@ -80,8 +80,6 @@ Each gift has a `return_as` setting, chosen by the sender:
 - If the sale is refused or fails after the stock reached the Agentic Wallet, the stock is sent back to the vault and returned to the sender.
 - The two sell quotes (`baw` and the Trading API) must agree within `MAX_QUOTE_DRIFT_PCT`, as for buys.
 
-**Not yet tried live:** selling a stock token with `baw market-order swap` (only the quote has been checked, and `--fromTokenQty` units for bStocks, which have a display multiplier, are unconfirmed). The Phase 11 rehearsal should include one cancel-as-USDT.
-
 ## Chat and conditional orders
 
 **Tell the agent** (on `/send`) turns plain English into a draft gift for the form: "Send Ada $5 of Nvidia, but only if it drops 0.5% by tomorrow 2PM". The model has a single tool, `propose_gift`, that only returns a draft. Code validates every field (the stock must exist, $1 to `MAX_GIFT_USD`, a deadline with a time zone, 10 minutes to 7 days ahead, a drop of 0–50%) and the sender still checks the form, signs in and pays. It can't buy, send or sign anything. Chat is switched off (and hidden) unless a model key is set: `OPENAI_API_KEY` (OpenAI Responses API, default model `gpt-6-luna`) or `ANTHROPIC_API_KEY` (default `claude-haiku-4-5-20251001`). With both set, OpenAI is used unless `CHAT_PROVIDER=anthropic`. `CHAT_MODEL` overrides the model, and `CHAT_DAILY_LIMIT` (default 400 a day; 8 a minute per IP) caps the cost. Message text is never logged.

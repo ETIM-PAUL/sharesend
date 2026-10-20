@@ -86,6 +86,8 @@ function publicGift(g: Gift) {
       : null,
     dryRun: g.dryRun,
     failureReason: g.failureReason,
+    // The recipient's one-time thank-you, once they've left it.
+    thanks: g.thanksNote ? { note: g.thanksNote, at: g.thankedAt } : null,
     // Public on-chain anyway; real hashes only (dry runs use synthetic ones).
     txs: Object.fromEntries(
       Object.entries({ payment: g.paymentTx, buy: g.buyTx, vault: g.vaultTx, claim: g.claimTx, return: g.returnTx, refund: g.refundTx }).filter(
