@@ -52,11 +52,12 @@ export function buildJobs(deps: JobDeps): JobDef[] {
     title: "Closes gifts nobody paid for once their price hold runs out",
     everyMs: 60_000,
     async run(db) {
-      // A gift with a payment row may be mid-settlement: never expire it here.
+      // A gift with a payment row may be mid-settlement: never expire it here. The other stocks in a basket are covered
+      // by their lead's payment, so they wait for it too.
       const list = await ids(
         db,
         `SELECT id FROM gifts g WHERE status = 'AWAITING_PAYMENT' AND payment_expires_at < now() - interval '1 minute'
-           AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.gift_id = g.id) ORDER BY created_at LIMIT 200`,
+           AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.gift_id = coalesce(g.basket_id, g.id)) ORDER BY created_at LIMIT 200`,
       );
       let n = 0;
       for (const id of list) {

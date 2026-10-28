@@ -79,23 +79,29 @@ export function ClaimView() {
   return (
     <div className="space-y-6">
       <p className="text-[1.05rem] text-ink">
-        {g.contributors.length > 1
+        {data.basket
+          ? `${g.senderName} sent you ${data.basket.items.length === 1 ? "a piece of" : `${data.basket.items.length} stocks:`} ${names(data.basket.items.map((i) => i.stock?.companyName ?? i.ticker))}.`
+          : g.contributors.length > 1
           ? `${names(g.contributors.map((c) => c.name))} chipped in to send you a piece of ${s?.companyName ?? g.ticker}.`
           : `${g.senderName} sent you a piece of ${s?.companyName ?? g.ticker}.`}
       </p>
       {g.channel === "agent" ? <AgentBadge /> : null}
 
-      <Certificate
-        ticker={g.ticker}
-        companyName={s?.companyName ?? g.ticker}
-        sharesOut={g.shares ?? 0}
-        amountUsd={g.valueNowUsd ?? g.usdSent}
-        issuerLabel={s?.issuerLabel ?? "tokenized"}
-        recipientName={g.recipientName}
-        senderName={g.senderName}
-        message={g.message}
-        sealed={sealed}
-      />
+      {data.basket ? (
+        <BasketCards basket={data.basket} gift={g} sealed={sealed} />
+      ) : (
+        <Certificate
+          ticker={g.ticker}
+          companyName={s?.companyName ?? g.ticker}
+          sharesOut={g.shares ?? 0}
+          amountUsd={g.valueNowUsd ?? g.usdSent}
+          issuerLabel={s?.issuerLabel ?? "tokenized"}
+          recipientName={g.recipientName}
+          senderName={g.senderName}
+          message={g.message}
+          sealed={sealed}
+        />
+      )}
 
       {g.contributors.length > 1 ? <FromEveryone contributors={g.contributors} /> : null}
 
@@ -105,7 +111,7 @@ export function ClaimView() {
 
       {g.status === "CLAIMED" ? <ThankYou id={id} code={code!} gift={g} onSent={(thanks) => setData({ ...data, gift: { ...g, thanks } })} /> : null}
 
-      <Explainer data={data} />
+      {data.basket ? data.basket.items.map((i) => <Explainer key={i.ticker} data={{ ...data, stock: i.stock, gift: { ...g, ticker: i.ticker, shares: i.shares } }} />) : <Explainer data={data} />}
       {g.dryRun ? <p className="text-xs text-ink-soft">Test gift: no real money or stock moves.</p> : null}
     </div>
   );
@@ -161,6 +167,33 @@ function ThankYou({ id, code, gift: g, onSent }: { id: string; code: string; gif
   );
 }
 
+/** A basket: the sender's note, then one card per stock with what it's worth. */
+function BasketCards({ basket, gift: g, sealed }: { basket: NonNullable<ClaimViewData["basket"]>; gift: ClaimViewData["gift"]; sealed: boolean }) {
+  return (
+    <section className="space-y-3" aria-label="What's in the basket">
+      {g.message ? (
+        <blockquote className="border-l-2 border-engrave pl-3 text-[1rem] italic text-ink">
+          {g.message}
+          <span className="mt-1 block text-sm not-italic text-ink-soft">{g.senderName}</span>
+        </blockquote>
+      ) : null}
+      <ul className="space-y-2.5">
+        {basket.items.map((i) => (
+          <li key={i.ticker} className="flex items-center justify-between gap-3 rounded-[10px] border border-engrave/40 bg-sheet px-4 py-3.5">
+            <span>
+              <span className="numerals block text-xl font-bold text-engrave">{i.ticker}</span>
+              <span className="block text-sm text-ink">{i.stock?.companyName ?? i.ticker}</span>
+              {i.shares ? <span className="block text-xs text-ink-soft">{i.shares.toFixed(4)} of a share</span> : null}
+            </span>
+            <span className="numerals text-xl font-bold text-ink">{sealed && i.valueNowUsd !== null ? usd(i.valueNowUsd) : usd(i.usdSent)}</span>
+          </li>
+        ))}
+      </ul>
+      {basket.droppedCount ? <p className="text-xs text-ink-soft">{basket.droppedCount === 1 ? "One stock" : `${basket.droppedCount} stocks`} couldn&apos;t be bought, so it isn&apos;t part of this gift.</p> : null}
+    </section>
+  );
+}
+
 /** A gift another agent paid for directly. */
 function AgentBadge() {
   return (
@@ -206,11 +239,13 @@ function ValueNow({ data }: { data: ClaimViewData }) {
       <p className="numerals text-4xl font-bold text-ink">{usd(g.valueNowUsd)}</p>
       <p className="mt-1 text-sm text-ink-soft">
         {usd(g.usdSent)} when {g.senderName} sent it
-        {Math.abs(diff) >= 0.01 ? `, ${diff > 0 ? "up" : "down"} ${usd(Math.abs(diff))} since` : ""}. The value moves with {data.stock?.companyName ?? g.ticker}&apos;s share price.
+        {Math.abs(diff) >= 0.01 ? `, ${diff > 0 ? "up" : "down"} ${usd(Math.abs(diff))} since` : ""}. The value moves with {data.basket ? "the share prices" : `${data.stock?.companyName ?? g.ticker}'s share price`}.
       </p>
-      <div className="mt-3">
-        <Sparkline points={data.series} label="Value since it was sent" />
-      </div>
+      {data.basket ? null : (
+        <div className="mt-3">
+          <Sparkline points={data.series} label="Value since it was sent" />
+        </div>
+      )}
     </section>
   );
 }
@@ -352,7 +387,7 @@ function ClaimPanel({ id, code, data, onClaimed }: { id: string; code: string; d
       <button className="w-full text-sm text-engrave underline underline-offset-4" onClick={() => setMode(mode === "email" ? "paste" : "email")}>
         {mode === "email" ? "I already have a BNB Chain wallet" : "Use my email instead"}
       </button>
-      {claimAs === "stock" ? (
+      {claimAs === "stock" && !data.basket ? (
         <button type="button" className="w-full text-sm text-ink-soft underline underline-offset-4" onClick={() => setClaimAs("usdt")}>
           Need cash? Take dollars instead
         </button>

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { usePrivy, useWallets } from "@privy-io/react-auth";
 import { agent, groupApi, type GiftQuote } from "@/lib/agent";
-import { countdown, usd } from "@/lib/format";
+import { countdown, splitUsd, usd } from "@/lib/format";
 import { getSenderName, saveSenderName, saveSent } from "@/lib/sent";
 import { useHydrated } from "@/lib/useHydrated";
 import { Certificate } from "./Certificate";
@@ -13,6 +13,7 @@ import { StockPicker, type Stock } from "./StockPicker";
 import { PayPanel, type PaidResult } from "./PayPanel";
 import { GiftProgress, useGift } from "./GiftProgress";
 import { ShareCard } from "./ShareCard";
+import { BasketProgress } from "./BasketProgress";
 import { Button, Field, Input, Notice, TextArea } from "./ui";
 import { ReturnChoice, type ReturnAs } from "./ReturnChoice";
 import { ChatPanel } from "./ChatPanel";
@@ -38,6 +39,10 @@ function duration(minutes: number): string {
 export function SendFlow() {
   const [stage, setStage] = useState<Stage>("details");
   const [stock, setStock] = useState<Stock | null>(null);
+  // A basket: 2 to 5 stocks, one payment, one claim link. The total is split evenly between the stocks.
+  const [isBasket, setIsBasket] = useState(false);
+  const [basketStocks, setBasketStocks] = useState<Stock[]>([]);
+  const [basketQuotes, setBasketQuotes] = useState<GiftQuote[]>([]);
   const [amount, setAmount] = useState("10");
   const [recipient, setRecipient] = useState("");
   const [message, setMessage] = useState("");
@@ -65,8 +70,13 @@ export function SendFlow() {
   /** What's still missing from the form, in the order the fields appear. */
   function missing(): { field: string; text: string }[] {
     const m: { field: string; text: string }[] = [];
-    if (!stock) m.push({ field: "stock", text: "pick a stock" });
-    if (!isGroup && !(usdNum >= 1)) m.push({ field: "amount", text: "enter an amount of at least $1" });
+    if (isBasket && !isGroup) {
+      if (basketStocks.length < MIN_BASKET) m.push({ field: "stock", text: `pick at least ${MIN_BASKET} stocks` });
+      if (!(usdNum >= Math.max(MIN_BASKET, basketStocks.length))) m.push({ field: "amount", text: `enter a total of at least $${Math.max(MIN_BASKET, basketStocks.length)}, so each stock gets $1 or more` });
+    } else {
+      if (!stock) m.push({ field: "stock", text: "pick a stock" });
+      if (!isGroup && !(usdNum >= 1)) m.push({ field: "amount", text: "enter an amount of at least $1" });
+    }
     if (!recipient.trim()) m.push({ field: "recipient-name", text: "say who it's for" });
     if (!sender.trim()) m.push({ field: "sender-name", text: "add your name" });
     return m;
@@ -77,6 +87,7 @@ export function SendFlow() {
   /** A chat draft fills in the form. Nothing is sent or bought until you've checked it and paid. */
   function applyDraft(d: GiftDraft, text: string) {
     setStock({ ticker: d.ticker, name: d.companyName });
+    setIsBasket(false);
     setIsGroup(!!d.group);
     if (d.group) setGroupMinutes(d.group.minutes);
     else setAmount(String(d.usd));
@@ -108,6 +119,42 @@ export function SendFlow() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function getBasketPrice() {
+    saveSenderName(sender.trim());
+    setLoading(true);
+    setError(null);
+    try {
+      const parts = splitUsd(usdNum, basketStocks.length);
+      const results = await Promise.all(basketStocks.map((s, i) => agent.quote(s.ticker, parts[i]!)));
+      const failed = results.findIndex((r) => !r.ok);
+      if (failed >= 0) {
+        const r = results[failed]!;
+        return setError(`${basketStocks[failed]!.ticker}: ${r.ok ? "" : r.message}`);
+      }
+      setBasketQuotes(results.map((r) => (r.ok ? r.quote : (null as never))));
+      setStage("quote");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function onBasketPaid(r: PaidResult) {
+    setPaid(r);
+    setStage("sent");
+    saveSent({
+      id: r.gift.id,
+      ticker: basketQuotes.map((q) => q.ticker).join(" · "),
+      companyName: `${basketQuotes.length} stocks`,
+      usd: Math.round(basketQuotes.reduce((s, q) => s + q.giftUsd, 0) * 100) / 100,
+      recipientName: recipient.trim(),
+      message: message.trim(),
+      senderAddress: r.senderAddress,
+      sentAt: new Date().toISOString(),
+    });
   }
 
   function onPaid(r: PaidResult) {
@@ -155,6 +202,7 @@ export function SendFlow() {
               setError(null);
               return setStage("group");
             }
+            if (isBasket) return getBasketPrice();
             getPrice();
           }}
         >
@@ -181,7 +229,32 @@ export function SendFlow() {
             </div>
           </fieldset>
 
-          <StockPicker value={stock} onChange={setStock} />
+          {isGroup ? null : (
+            <fieldset>
+              <legend className="mb-2 text-sm font-medium text-ink">What are you sending?</legend>
+              <div className="grid grid-cols-2 gap-2">
+                {(
+                  [
+                    [false, "One stock", "Pick a company."],
+                    [true, "A basket", `${MIN_BASKET} to ${MAX_BASKET} stocks, one link.`],
+                  ] as const
+                ).map(([value, label, hint]) => (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={() => setIsBasket(value)}
+                    aria-pressed={isBasket === value}
+                    className={`rounded-[10px] border px-3.5 py-3 text-left ${isBasket === value ? "border-engrave bg-sheet" : "border-rule"}`}
+                  >
+                    <span className="block text-[0.95rem] font-semibold text-ink">{label}</span>
+                    <span className="block text-xs text-ink-soft">{hint}</span>
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+          )}
+
+          {isBasket && !isGroup ? <BasketBuilder stocks={basketStocks} onChange={setBasketStocks} /> : <StockPicker value={stock} onChange={setStock} />}
 
           {isGroup ? (
           <Field label="Collect for" hint="Then the agent buys the gift with everything raised (up to $20, at least $1 from each friend). You can close it sooner. 5 minutes is handy for a quick demo.">
@@ -199,7 +272,10 @@ export function SendFlow() {
             </div>
           </Field>
           ) : (
-          <Field label="Amount in US dollars" hint="From $1 to $20 per gift. Ondo stocks need more than $5.">
+          <Field
+            label={isBasket ? "Total in US dollars" : "Amount in US dollars"}
+            hint={isBasket ? `Split evenly between the stocks, at least $1 each, up to $20 in total. A $0.10 fee is added for each stock. Ondo stocks need more than $5.` : "From $1 to $20 per gift. Ondo stocks need more than $5."}
+          >
             <div className="flex gap-2">
               {AMOUNTS.map((a) => (
                 <button
@@ -228,7 +304,7 @@ export function SendFlow() {
             <Input id="sender-name" value={sender} onChange={(e) => setSender(e.target.value)} placeholder="Your first name" maxLength={60} autoComplete="given-name" />
           </Field>
 
-          {isGroup ? null : <WhenChoice value={when} onChange={setWhen} />}
+          {isGroup || isBasket ? null : <WhenChoice value={when} onChange={setWhen} />}
 
           {isGroup ? null : <ReturnChoice value={returnAs} onChange={setReturnAs} />}
 
@@ -240,6 +316,50 @@ export function SendFlow() {
         </div>
       </div>
     );
+
+  if (isBasket && !isGroup && basketQuotes.length) {
+    const basketItems = basketQuotes.map((q) => ({ ticker: q.ticker, usd: q.giftUsd }));
+    const giftTotal = Math.round(basketQuotes.reduce((t, q) => t + q.giftUsd, 0) * 100) / 100;
+    const total = Math.round(basketQuotes.reduce((t, q) => t + q.totalUsd, 0) * 100) / 100;
+    if (stage === "quote")
+      return (
+        <Narrow>
+          <BasketQuoteStage quotes={basketQuotes} total={total} onBack={() => setStage("details")} onRefresh={getBasketPrice} onPay={() => setStage("pay")} loading={loading} error={error} />
+        </Narrow>
+      );
+    if (stage === "pay")
+      return (
+        <Narrow>
+          <div className="space-y-5">
+            <BasketList quotes={basketQuotes} />
+            <PayPanel
+              ticker="BASKET"
+              amountUsd={giftTotal}
+              totalUsd={total}
+              senderName={sender.trim()}
+              recipientName={recipient.trim()}
+              message={message.trim()}
+              returnAs={returnAs}
+              open={(senderAddress) => agent.openBasket({ items: basketItems, senderAddress, senderName: sender.trim(), recipientName: recipient.trim(), message: message.trim(), returnAs })}
+              onPaid={onBasketPaid}
+              onExpired={() => {
+                setError("The held prices ran out. Here are fresh ones.");
+                getBasketPrice();
+              }}
+            />
+            <Button variant="quiet" onClick={() => setStage("quote")}>
+              Back
+            </Button>
+          </div>
+        </Narrow>
+      );
+    if (stage === "sent" && paid)
+      return (
+        <Narrow>
+          <BasketSentStage quotes={basketQuotes} paid={paid} recipient={recipient} message={message} />
+        </Narrow>
+      );
+  }
 
   if (stage === "group" && stock)
     return (
@@ -432,6 +552,132 @@ function GroupStart(p: { ticker: string; companyName: string; recipient: string;
       <Button variant="quiet" onClick={p.onBack}>
         Back
       </Button>
+    </div>
+  );
+}
+
+const MIN_BASKET = 2;
+const MAX_BASKET = 5;
+
+/** Picks the stocks for a basket: the ones chosen so far (tap to remove), then the usual picker to add another. */
+function BasketBuilder({ stocks, onChange }: { stocks: Stock[]; onChange: (s: Stock[]) => void }) {
+  const full = stocks.length >= MAX_BASKET;
+  return (
+    <div id="stock-picker" className="space-y-3">
+      <div>
+        <span className="mb-1.5 block text-sm font-medium text-ink">
+          Stocks in the basket <span className="font-normal text-ink-soft">({stocks.length} of {MIN_BASKET} to {MAX_BASKET})</span>
+        </span>
+        {stocks.length ? (
+          <ul className="flex flex-wrap gap-2">
+            {stocks.map((s) => (
+              <li key={s.ticker}>
+                <button
+                  type="button"
+                  onClick={() => onChange(stocks.filter((x) => x.ticker !== s.ticker))}
+                  aria-label={`Remove ${s.ticker}`}
+                  className="rounded-full border border-engrave bg-engrave px-3 py-1.5 text-sm text-on-engrave"
+                >
+                  <span className="font-semibold">{s.ticker}</span> <span aria-hidden>✕</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-ink-soft">Tap stocks below to add them.</p>
+        )}
+      </div>
+      {full ? (
+        <p className="text-sm text-ink-soft">That&apos;s {MAX_BASKET}, the most a basket can hold. Remove one to add another.</p>
+      ) : (
+        <StockPicker value={null} onChange={(s) => onChange(stocks.some((x) => x.ticker === s.ticker) ? stocks : [...stocks, s])} />
+      )}
+    </div>
+  );
+}
+
+function BasketList({ quotes }: { quotes: GiftQuote[] }) {
+  return (
+    <ul className="divide-y divide-rule border-y border-rule">
+      {quotes.map((q) => (
+        <li key={q.ticker} className="flex items-center justify-between gap-3 py-3">
+          <span>
+            <span className="numerals block text-lg font-bold text-engrave">{q.ticker}</span>
+            <span className="block text-sm text-ink-soft">
+              {q.name} · {q.sharesOut.toFixed(4)} of a share
+            </span>
+          </span>
+          <span className="numerals text-lg text-ink">{usd(q.giftUsd)}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function BasketQuoteStage(p: { quotes: GiftQuote[]; total: number; onBack: () => void; onRefresh: () => void; onPay: () => void; loading: boolean; error: string | null }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const left = Math.min(...p.quotes.map((q) => q.expiresAt)) - now;
+  const gift = Math.round(p.quotes.reduce((t, q) => t + q.giftUsd, 0) * 100) / 100;
+  const fee = Math.round(p.quotes.reduce((t, q) => t + q.feeUsd, 0) * 100) / 100;
+  const closed = p.quotes.some((q) => q.warnings.some((w) => w.code === "WEEKEND_PREMIUM"));
+  return (
+    <div className="space-y-5">
+      <h1 className="numerals text-[1.8rem] font-bold leading-tight text-ink">A basket of {p.quotes.length} stocks</h1>
+      <BasketList quotes={p.quotes} />
+      <div className="space-y-1.5 text-[0.95rem]">
+        <Row label="Gift" value={usd(gift)} />
+        <Row label={`ShareSend fee (${usd(p.quotes[0]?.feeUsd ?? 0)} a stock)`} value={usd(fee)} />
+        <div className="flex justify-between border-t border-rule pt-2 font-semibold">
+          <span>You pay, once</span>
+          <span className="numerals text-lg">{usd(p.total)}</span>
+        </div>
+      </div>
+      <p className="text-sm text-ink-soft">One signature pays for every stock. They get one link and claim them all together. If a stock can&apos;t be bought, only that one is refunded.</p>
+      {closed ? <Notice>The US stock market is closed, so some prices are above the last close. You can still send now, or wait for a closer price.</Notice> : null}
+      {p.error ? <Notice kind="error">{p.error}</Notice> : null}
+      {left > 0 ? (
+        <>
+          <Button onClick={p.onPay}>Pay {usd(p.total)}</Button>
+          <p className="text-center text-xs text-ink-soft">Prices good for {countdown(left)}</p>
+        </>
+      ) : (
+        <Button onClick={p.onRefresh} disabled={p.loading}>
+          {p.loading ? "Getting new prices…" : "Get new prices"}
+        </Button>
+      )}
+      <Button variant="quiet" onClick={p.onBack}>
+        Change details
+      </Button>
+    </div>
+  );
+}
+
+function BasketSentStage({ quotes, paid, recipient, message }: { quotes: GiftQuote[]; paid: PaidResult; recipient: string; message: string }) {
+  const { gift } = useGift(paid.gift.id, paid.gift);
+  const giftTotal = Math.round(quotes.reduce((t, q) => t + q.giftUsd, 0) * 100) / 100;
+  const names = quotes.map((q) => q.ticker);
+  return (
+    <div className="space-y-6">
+      <h1 className="numerals text-[1.8rem] font-bold leading-tight text-ink">{usd(giftTotal)} in {quotes.length} stocks, paid</h1>
+      <BasketList quotes={quotes} />
+      {paid.claimUrl ? (
+        <ShareCard url={paid.claimUrl} recipientName={recipient.trim()} amountUsd={giftTotal} companyName={`${names.slice(0, -1).join(", ")} and ${names.at(-1)}`} message={message.trim()} />
+      ) : (
+        <Notice>This basket was already paid. You can get a new claim link from its page.</Notice>
+      )}
+      {gift?.basket ? (
+        <section>
+          <h2 className="mb-3 text-sm font-medium text-ink-soft">Where it is now</h2>
+          <BasketProgress basket={gift.basket} recipientName={recipient.trim()} />
+        </section>
+      ) : null}
+      <Link href={`/sent/${paid.gift.id}`} className="block text-center text-sm text-engrave underline underline-offset-4">
+        Open this basket&apos;s page
+      </Link>
     </div>
   );
 }

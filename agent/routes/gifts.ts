@@ -4,6 +4,7 @@
 //   GET|POST /gifts/:id/pay     no PAYMENT-SIGNATURE → 402 again; with it → verify, settle, PAID, claim link
 //   POST /gifts/:id/pay/draft   {from, asset} → exact EIP-712 data to sign, balance, and the Permit2 approve tx if needed
 //   GET /pay/:id                minimal pay page for browser wallets (MetaMask, Binance Web3 Wallet, Trust, …)
+//   POST /baskets               several stocks in one gift → 402 for the whole total; paid at /gifts/:leadId/pay like any gift
 //   GET /gifts/:id              public status (no sender address, no message, no codes)
 //   POST /gifts/:id/cancel      {message, signature} signed by the sender → expire / refund / return
 //   POST /gifts/:id/link        {message, signature} signed by the sender → new claim link (old one stops working)
@@ -13,12 +14,12 @@
 import { Hono, type Context } from "hono";
 import { config } from "../config.js";
 import { getDb } from "../db/pool.js";
-import { dailyUsedUsd, getGift, reissueClaimCode, setReturnAs, type Gift } from "../gifts/ledger.js";
+import { basketMembers, basketStatus, dailyUsedUsd, getGift, isBasketLead, reissueClaimCode, setReturnAs, type Gift } from "../gifts/ledger.js";
 import { actionOf, verifySender, type SenderAction } from "../gifts/senderAuth.js";
 import { publicClient } from "../chain/bsc.js";
 import { searchTickers } from "../binance/rwa.js";
-import { cancelGift } from "../execution/cancel.js";
-import { advanceInBackground } from "../execution/advance.js";
+import { cancelBasket, cancelGift } from "../execution/cancel.js";
+import { advanceInBackground, advanceManyInBackground } from "../execution/advance.js";
 import { claimLink } from "../gifts/codes.js";
 import { BinanceError } from "../binance/errors.js";
 import { b402, BSC_NETWORK, type PaymentRequirements } from "../payments/b402.js";
@@ -30,6 +31,7 @@ import type { PaymentPayload } from "../payments/b402.js";
 import type { GiftChannel } from "../gifts/ledger.js";
 import { onchainFunds, payForGift } from "../payments/pay.js";
 import { openGift } from "../payments/openGift.js";
+import { openBasket } from "../payments/openBasket.js";
 import { economics } from "../payments/economics.js";
 
 export const gifts = new Hono();
@@ -71,6 +73,8 @@ function publicGift(g: Gift) {
     channel: g.channel,
     // Group gifts: a contribution (never bought on its own) or the group's pooled gift.
     group: g.groupId ? { id: g.groupId, role: g.groupRole } : null,
+    // The id of the basket this gift is one stock of (several stocks, one payment, one claim link).
+    basketId: g.basketId,
     // A conditional order: where it stands, never anything private.
     order: g.order
       ? {
@@ -97,8 +101,27 @@ function publicGift(g: Gift) {
   };
 }
 
-export function respond402(c: Context, g: Gift, error?: string, extra: Record<string, unknown> = {}) {
-  const body = paymentRequired(`${origin(c)}/gifts/${g.id}/pay`, `${g.ticker} gift for ${g.recipientName}: $${g.usdCost} + $${g.feeUsd} fee`, (g.paymentRequirements ?? []) as PaymentRequirements[], error);
+/** "3-stock basket for Ada: $9 + $0.30 fees" for a basket's lead gift; undefined for any other gift. */
+async function basketLabel(db: NonNullable<ReturnType<typeof dbOr503>>, g: Gift): Promise<string | undefined> {
+  if (!isBasketLead(g)) return undefined;
+  const m = await basketMembers(db, g.id);
+  const usd = Math.round(m.reduce((s, x) => s + x.usdCost, 0) * 100) / 100;
+  const fee = Math.round(m.reduce((s, x) => s + x.feeUsd, 0) * 100) / 100;
+  return `${m.length}-stock basket for ${g.recipientName}: $${usd} + $${fee} fees`;
+}
+
+/** What the sender and the pay screens need to show a basket: its stocks and one overall status. */
+async function basketSummary(db: NonNullable<ReturnType<typeof dbOr503>>, g: Gift) {
+  if (!isBasketLead(g)) return null;
+  const m = await basketMembers(db, g.id);
+  return {
+    status: basketStatus(m),
+    items: m.map((x) => ({ id: x.id, ticker: x.ticker, usd: x.usdCost, fee: x.feeUsd, status: x.status })),
+  };
+}
+
+export function respond402(c: Context, g: Gift, error?: string, extra: Record<string, unknown> = {}, label?: string) {
+  const body = paymentRequired(`${origin(c)}/gifts/${g.id}/pay`, label ?? `${g.ticker} gift for ${g.recipientName}: $${g.usdCost} + $${g.feeUsd} fee`, (g.paymentRequirements ?? []) as PaymentRequirements[], error);
   c.header("PAYMENT-REQUIRED", encodeHeader(body));
   return c.json({ ...body, gift: publicGift(g), ...extra }, 402);
 }
@@ -135,7 +158,7 @@ async function payAtCreate(c: Context, db: NonNullable<ReturnType<typeof dbOr503
   if (typeof input?.giftId === "string") g = await getGift(db, input.giftId);
   else {
     const { rows } = await db.query<{ id: string }>(
-      `SELECT id FROM gifts WHERE status = 'AWAITING_PAYMENT' AND payment_expires_at > now() AND group_id IS NULL
+      `SELECT id FROM gifts WHERE status = 'AWAITING_PAYMENT' AND payment_expires_at > now() AND group_id IS NULL AND basket_id IS NULL
          AND lower(sender_address) = lower($1) AND ticker = upper($2) AND usd_cost = $3 AND recipient_name = $4
        ORDER BY created_at DESC LIMIT 5`,
       [payer, String(input?.ticker ?? ""), Math.round(Number(input?.usd) * 100) / 100, String(input?.recipientName ?? "").trim()],
@@ -189,6 +212,36 @@ gifts.post("/gifts", async (c) => {
   }
 });
 
+gifts.post("/baskets", async (c) => {
+  if (limited(clientIp(c))) return c.json({ ok: false, error: "too many requests" }, 429);
+  const db = dbOr503(c);
+  if (!db) return c.json({ ok: false, error: "database not configured" }, 503);
+  const input = await c.req.json().catch(() => null);
+  try {
+    const r = await openBasket(db, input, await dailyUsedUsd(db), channelOf(c));
+    if (!r.ok) return c.json({ ok: false, code: r.code, error: r.message }, r.status);
+    c.header("Location", `/gifts/${r.gift.id}/pay`);
+    return respond402(
+      c,
+      r.gift,
+      undefined,
+      {
+        basket: await basketSummary(db, r.gift),
+        quote: {
+          giftUsd: Math.round(r.items.reduce((s, i) => s + i.quote.giftUsd, 0) * 100) / 100,
+          feeUsd: Math.round(r.items.reduce((s, i) => s + i.quote.feeUsd, 0) * 100) / 100,
+          totalUsd: r.totalUsd,
+          items: r.items.map((i) => ({ ticker: i.quote.ticker, name: i.quote.name, issuer: i.quote.issuerLabel, sharesOut: i.quote.sharesOut, pricePerShare: i.quote.pricePerShare, giftUsd: i.quote.giftUsd, feeUsd: i.quote.feeUsd, warnings: i.quote.warnings })),
+        },
+      },
+      await basketLabel(db, r.gift),
+    );
+  } catch (e) {
+    if (e instanceof BinanceError) return c.json({ ok: false, error: `Binance: ${e.message}` }, 502);
+    throw e;
+  }
+});
+
 async function pay(c: Context) {
   const db = dbOr503(c);
   if (!db) return c.json({ ok: false, error: "database not configured" }, 503);
@@ -200,10 +253,10 @@ async function pay(c: Context) {
   if (!header) {
     if (g.status !== "AWAITING_PAYMENT") return c.json({ ok: false, error: `gift is ${g.status}`, gift: publicGift(g) }, 409);
     if (g.paymentExpiresAt.getTime() <= Date.now()) return c.json({ ok: false, error: "payment window expired; request a new quote" }, 410);
-    return respond402(c, g);
+    return respond402(c, g, undefined, {}, await basketLabel(db, g));
   }
   const payload = decodePaymentHeader(header);
-  if (!payload) return respond402(c, g, "malformed PAYMENT-SIGNATURE header");
+  if (!payload) return respond402(c, g, "malformed PAYMENT-SIGNATURE header", {}, await basketLabel(db, g));
   return settle(c, db, g, payload);
 }
 
@@ -213,12 +266,15 @@ async function settle(c: Context, db: NonNullable<ReturnType<typeof dbOr503>>, g
   try {
     const r = await payForGift({ db, facilitator: b402, funds: onchainFunds, liveTrading: config.liveTrading }, id, payload);
     if (!r.ok) {
-      if (r.status === 402) return respond402(c, g, r.error);
+      if (r.status === 402) return respond402(c, g, r.error, {}, await basketLabel(db, g));
       return c.json({ ok: false, error: r.error, retryable: r.retryable ?? false }, r.status);
     }
     c.header("PAYMENT-RESPONSE", encodeHeader({ success: true, transaction: r.settleTx ?? "", network: BSC_NETWORK, payer: r.gift.senderAddress }));
     // Start the buy right away when this host can run it (needs a signed-in `baw`); otherwise it waits as "queued".
-    if (!r.alreadyPaid && process.env.AUTO_EXECUTE === "true") advanceInBackground(db, id);
+    if (!r.alreadyPaid && process.env.AUTO_EXECUTE === "true") {
+      if (isBasketLead(r.gift)) advanceManyInBackground(db, (await basketMembers(db, id)).map((m) => m.id));
+      else advanceInBackground(db, id);
+    }
     const base = process.env.CLAIM_BASE_URL ?? origin(c);
     // A group contribution has no claim link of its own: the group's gift gets one when the group closes.
     const contribution = r.gift.groupRole === "contribution";
@@ -265,7 +321,7 @@ gifts.post("/gifts/:id/pay/draft", async (c) => {
   return c.json({
     ok: true,
     requirement,
-    resource: { url: `${origin(c)}/gifts/${g.id}/pay`, description: `${g.ticker} gift for ${g.recipientName}`, mimeType: "application/json" },
+    resource: { url: `${origin(c)}/gifts/${g.id}/pay`, description: (await basketLabel(db, g)) ?? `${g.ticker} gift for ${g.recipientName}`, mimeType: "application/json" },
     method: req.method,
     balance: funds.balance.toString(),
     sufficient: funds.balance >= amount,
@@ -287,7 +343,7 @@ gifts.get("/gifts/:id", async (c) => {
   if (!g) return c.json({ ok: false, error: "gift not found" }, 404);
   // What the sender got back when it was sold: USDT sent to them (raw units, 18 decimals), if that happened.
   const cash = await db.query<{ amount: string }>("SELECT amount FROM exec_records WHERE gift_id = $1 AND kind = 'cashout' AND status = 'confirmed'", [g.id]);
-  return c.json({ ok: true, gift: publicGift(g), returnedUsdt: cash.rows[0] ? Number(BigInt(cash.rows[0].amount) / 10n ** 14n) / 10_000 : null });
+  return c.json({ ok: true, gift: publicGift(g), returnedUsdt: cash.rows[0] ? Number(BigInt(cash.rows[0].amount) / 10n ** 14n) / 10_000 : null, basket: await basketSummary(db, g) });
 });
 
 const verifyWithChain = (address: string, message: string, signature: string) =>
@@ -313,8 +369,10 @@ gifts.post("/gifts/:id/cancel", async (c) => {
   const a = await senderAction(c, ["cancel", "cancel-stock", "cancel-usdt"]);
   if ("res" in a) return a.res;
   const returnAs = a.action === "cancel-usdt" ? "usdt" : a.action === "cancel-stock" ? "stock" : undefined;
-  const r = await cancelGift(a.db!, a.g!.id, undefined, returnAs);
-  return r.ok ? c.json({ ok: true, gift: publicGift(r.gift) }) : c.json({ ok: false, error: r.error }, r.status);
+  const r = isBasketLead(a.g!) ? await cancelBasket(a.db!, a.g!.id, undefined, returnAs) : await cancelGift(a.db!, a.g!.id, undefined, returnAs);
+  if (!r.ok) return c.json({ ok: false, error: r.error }, r.status);
+  const skipped: string[] = (r as { skipped?: string[] }).skipped ?? [];
+  return c.json({ ok: true, gift: publicGift(r.gift), basket: await basketSummary(a.db!, r.gift), ...(skipped.length ? { skipped } : {}) });
 });
 
 // How an unclaimed gift comes back to the sender: the stock itself, or sold into USDT. Changeable until the sale starts.
@@ -322,7 +380,9 @@ gifts.post("/gifts/:id/return-as", async (c) => {
   const a = await senderAction(c, ["return-stock", "return-usdt"]);
   if ("res" in a) return a.res;
   const choice = a.action === "return-usdt" ? "usdt" : "stock";
-  if (!(await setReturnAs(a.db!, a.g!.id, choice))) return c.json({ ok: false, error: "it's too late to change this: the return has already started or finished" }, 409);
+  const ids = isBasketLead(a.g!) ? (await basketMembers(a.db!, a.g!.id)).map((m) => m.id) : [a.g!.id];
+  const results = await Promise.all(ids.map((id) => setReturnAs(a.db!, id, choice)));
+  if (!results.some(Boolean)) return c.json({ ok: false, error: "it's too late to change this: the return has already started or finished" }, 409);
   return c.json({ ok: true, returnAs: choice });
 });
 

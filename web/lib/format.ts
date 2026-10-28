@@ -39,3 +39,10 @@ export function ago(iso: string | null | undefined, now = Date.now()): string {
   if (s < 86400) return `${Math.round(s / 3600)} h ago`;
   return `${Math.round(s / 86400)} d ago`;
 }
+
+/** Splits a total into `n` amounts in whole cents that add back up to the total; the first one takes any leftover cents. */
+export function splitUsd(total: number, n: number): number[] {
+  const cents = Math.round(total * 100);
+  const each = Math.floor(cents / n);
+  return Array.from({ length: n }, (_, i) => (each + (i === 0 ? cents - each * n : 0)) / 100);
+}

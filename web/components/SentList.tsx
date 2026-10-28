@@ -5,24 +5,9 @@ import Link from "next/link";
 import { agent } from "@/lib/agent";
 import { usd } from "@/lib/format";
 import { listSent } from "@/lib/sent";
+import { GIFT_LABEL as LABEL } from "@/lib/status";
 import { useHydrated } from "@/lib/useHydrated";
 import { Button } from "./ui";
-
-const LABEL: Record<string, string> = {
-  WAITING_PRICE: "Waiting for the price",
-  AWAITING_PAYMENT: "Not paid",
-  PAID: "Queued",
-  BUYING: "Buying",
-  READY: "Waiting to be claimed",
-  CLAIMING: "Being claimed",
-  CLAIMED: "Claimed",
-  RETURNING: "Coming back to you",
-  RETURNED: "Returned to you",
-  REFUNDING: "Refunding",
-  REFUNDED: "Refunded",
-  FAILED: "Refunding",
-  EXPIRED: "Not paid",
-};
 
 export function SentList() {
   const hydrated = useHydrated();
@@ -36,7 +21,7 @@ export function SentList() {
       agent
         .gift(g.id)
         .then((x) => {
-          setStatus((s) => ({ ...s, [g.id]: x.status === "PAID" && x.order && !x.order.triggered ? "WAITING_PRICE" : x.status }));
+          setStatus((s) => ({ ...s, [g.id]: x.basket?.status ?? (x.status === "PAID" && x.order && !x.order.triggered ? "WAITING_PRICE" : x.status) }));
           if (x.thanks) setThanked((t) => ({ ...t, [g.id]: true }));
         })
         .catch(() => {}),

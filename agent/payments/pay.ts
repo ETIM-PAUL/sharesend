@@ -2,8 +2,8 @@
 // B402 verify only checks the signature (it accepts an unfunded payer), so a gift is PAID only after settle.
 import { createPublicClient, erc20Abi, http, type Address } from "viem";
 import { bsc } from "viem/chains";
-import type { Db } from "../db/pool.js";
-import { getGift, StaleStateError, transition, type Gift } from "../gifts/ledger.js";
+import { withTx, type Db } from "../db/pool.js";
+import { basketMembers, getGift, isBasketLead, StaleStateError, transition, transitionOn, type Gift } from "../gifts/ledger.js";
 import { generateClaimCode, hashClaimCode } from "../gifts/codes.js";
 import { RPC_URL } from "../chain/bsc.js";
 import { PERMIT2_ADDRESS, type Facilitator, type PaymentPayload, type PaymentRequirements } from "./b402.js";
@@ -49,6 +49,26 @@ async function issueClaimCode(db: Db, giftId: string): Promise<string | null> {
     hashClaimCode(code),
   ]);
   return r.rowCount ? code : null;
+}
+
+/**
+ * Marks a paid gift PAID. For a basket's lead, every stock in the basket becomes PAID in the same transaction (the one
+ * payment covered all of them), so a crash can't leave some stocks paid for and others waiting to expire.
+ */
+async function markPaid(db: Db, gift: Gift, paymentTx: string): Promise<{ gift: Gift; basket: Gift[] }> {
+  if (!isBasketLead(gift)) return { gift: await transition(db, gift.id, "AWAITING_PAYMENT", "PAID", { paymentTx }), basket: [] };
+  return withTx(db, async (c) => {
+    const lead = await transitionOn(c, gift.id, "AWAITING_PAYMENT", "PAID", { paymentTx });
+    const rest: Gift[] = [];
+    for (const m of (await basketMembers(c, gift.id)).filter((x) => x.id !== gift.id && x.status === "AWAITING_PAYMENT"))
+      rest.push(await transitionOn(c, m.id, "AWAITING_PAYMENT", "PAID", { paymentTx }, { detail: { basket: gift.id } }));
+    return { gift: lead, basket: [lead, ...rest] };
+  });
+}
+
+/** A fee is earned on every stock in a basket, as on separate gifts. They share one payment, so only the lead's row is keyed by its tx. */
+async function recordFees(db: Db, paid: { gift: Gift; basket: Gift[] }, tx: string | null) {
+  for (const g of paid.basket.length ? paid.basket : [paid.gift]) await recordFee(db, g, g.id === paid.gift.id ? tx : `${tx ?? "fee"}:${g.id}`);
 }
 
 async function recordFee(db: Db, g: Gift, tx: string | null) {
@@ -122,9 +142,9 @@ export async function payForGift(d: PayDeps, giftId: string, payload: PaymentPay
   if (!d.liveTrading) {
     // Dry run: everything except moving the sender's money.
     await d.db.query("UPDATE payments SET status = 'verified_dry_run', updated_at = now() WHERE gift_id = $1", [giftId]);
-    const paid = await transition(d.db, giftId, "AWAITING_PAYMENT", "PAID", { paymentTx: `dryrun:verified:${hash.slice(0, 16)}` });
-    await recordFee(d.db, paid, null);
-    return { ok: true, gift: paid, claimCode: await issueClaimCode(d.db, giftId), settleTx: null, alreadyPaid: false };
+    const paid = await markPaid(d.db, gift, `dryrun:verified:${hash.slice(0, 16)}`);
+    await recordFees(d.db, paid, null);
+    return { ok: true, gift: paid.gift, claimCode: await issueClaimCode(d.db, giftId), settleTx: null, alreadyPaid: false };
   }
 
   let settled;
@@ -141,13 +161,13 @@ export async function payForGift(d: PayDeps, giftId: string, payload: PaymentPay
   }
 
   await d.db.query("UPDATE payments SET status = 'settled', settle_tx = $2, error = NULL, updated_at = now() WHERE gift_id = $1", [giftId, settled.transaction]);
-  let paid: Gift;
+  let paid: { gift: Gift; basket: Gift[] };
   try {
-    paid = await transition(d.db, giftId, "AWAITING_PAYMENT", "PAID", { paymentTx: settled.transaction });
+    paid = await markPaid(d.db, gift, settled.transaction);
   } catch (e) {
     if (!(e instanceof StaleStateError)) throw e;
-    paid = (await getGift(d.db, giftId))!; // a concurrent retry got there first
+    paid = { gift: (await getGift(d.db, giftId))!, basket: [] }; // a concurrent retry got there first
   }
-  await recordFee(d.db, paid, settled.transaction!);
-  return { ok: true, gift: paid, claimCode: await issueClaimCode(d.db, giftId), settleTx: settled.transaction!, alreadyPaid: false };
+  await recordFees(d.db, paid, settled.transaction!);
+  return { ok: true, gift: paid.gift, claimCode: await issueClaimCode(d.db, giftId), settleTx: settled.transaction!, alreadyPaid: false };
 }

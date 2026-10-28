@@ -11,6 +11,7 @@ import { shortAddr, usd } from "@/lib/format";
 import { getSent, type SentGift } from "@/lib/sent";
 import { useHydrated } from "@/lib/useHydrated";
 import { GiftProgress, useGift } from "./GiftProgress";
+import { BasketProgress } from "./BasketProgress";
 import { ShareCard } from "./ShareCard";
 import { ThanksCard } from "./ThanksCard";
 import { Button, Notice } from "./ui";
@@ -32,7 +33,7 @@ export function SentGiftView() {
     <div className="space-y-6">
       <div>
         <h1 className="numerals text-3xl font-bold text-ink">
-          {usd(gift.usd)} of {gift.ticker}
+          {gift.basket ? `${usd(gift.basket.items.reduce((s, i) => s + i.usd, 0))} in ${gift.basket.items.length} stocks` : `${usd(gift.usd)} of ${gift.ticker}`}
         </h1>
         <p className="mt-1 text-ink-soft">
           For {gift.recipientName}
@@ -49,8 +50,8 @@ export function SentGiftView() {
         ) : null}
       </div>
       {gift.thanks ? <ThanksCard from={gift.recipientName} thanks={gift.thanks} /> : null}
-      <GiftProgress gift={gift} />
-      <SenderActions gift={gift} local={local} onChange={setGift} />
+      {gift.basket ? <BasketProgress basket={gift.basket} recipientName={gift.recipientName} /> : <GiftProgress gift={gift} />}
+      <SenderActions gift={gift.basket ? { ...gift, status: gift.basket.status } : gift} local={local} onChange={setGift} />
       <Link href="/sent" className="block text-sm text-engrave underline underline-offset-4">
         All gifts you sent
       </Link>
@@ -89,7 +90,7 @@ function SenderActions({ gift, local, onChange }: { gift: PublicGift; local?: Se
     try {
       const r = await sign(action);
       if (action === "link" && r.claimUrl) setLink(r.claimUrl);
-      if (action.startsWith("cancel") && r.gift) onChange({ ...r.gift, returnedUsdt: null });
+      if (action.startsWith("cancel") && r.gift) onChange({ ...r.gift, basket: r.basket ?? null, returnedUsdt: null });
       if (action.startsWith("return") && r.returnAs) onChange({ ...gift, returnAs: r.returnAs });
       setConfirmCancel(false);
     } catch (e) {

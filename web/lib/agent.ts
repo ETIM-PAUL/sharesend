@@ -44,6 +44,15 @@ export interface PublicGift {
   group?: { id: string; role: "contribution" | "pool" } | null;
   /** The recipient's one-time thank-you, once they've left it. */
   thanks?: Thanks | null;
+  /** Set when this is one stock of a basket (several stocks, one payment, one claim link). */
+  basketId?: string | null;
+  /** On a basket's lead gift: every stock in it and one overall status. */
+  basket?: BasketSummary | null;
+}
+
+export interface BasketSummary {
+  status: GiftStatus;
+  items: { id: string; ticker: string; usd: number; fee: number; status: GiftStatus }[];
 }
 
 export interface Thanks {
@@ -156,10 +165,21 @@ export const agent = {
       headers: { "PAYMENT-SIGNATURE": paymentHeader },
     }),
 
-  gift: (id: string) => call<{ gift: PublicGift; returnedUsdt: number | null }>(`/gifts/${id}`).then((r) => ({ ...r.gift, returnedUsdt: r.returnedUsdt })),
+  gift: (id: string) => call<{ gift: PublicGift; returnedUsdt: number | null; basket?: BasketSummary | null }>(`/gifts/${id}`).then((r) => ({ ...r.gift, returnedUsdt: r.returnedUsdt, basket: r.basket ?? null })),
+
+  /** Several stocks in one gift: one payment for the total, one claim link. Answers 402 like openGift. */
+  async openBasket(input: { items: { ticker: string; usd: number }[]; senderAddress: string; senderName: string; recipientName: string; message: string; returnAs?: "stock" | "usdt" }) {
+    const r = await call<{ gift: PublicGift; accepts: PaymentRequirement[]; resource: Draft["resource"]; error?: string }>(
+      "/baskets",
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input) },
+      [402],
+    );
+    if (!r.accepts) throw new AgentError(r.error ?? "Couldn't start the payment", 400);
+    return r;
+  },
 
   senderAction: (id: string, action: SenderActionName, message: string, signature: string) =>
-    call<{ ok: true; gift?: PublicGift; claimUrl?: string; returnAs?: "stock" | "usdt" }>(`/gifts/${id}/${action.startsWith("cancel") ? "cancel" : action.startsWith("return") ? "return-as" : "link"}`, {
+    call<{ ok: true; gift?: PublicGift; basket?: BasketSummary | null; claimUrl?: string; returnAs?: "stock" | "usdt" }>(`/gifts/${id}/${action.startsWith("cancel") ? "cancel" : action.startsWith("return") ? "return-as" : "link"}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ message, signature }),
@@ -229,6 +249,19 @@ export interface ClaimViewData {
     dryRun: boolean;
   };
   stock: StockCard | null;
+  series: { t: number; usd: number }[];
+  /** A basket: one card per stock (the gift above holds the totals and one overall status). */
+  basket?: { items: BasketItem[]; droppedCount: number };
+}
+
+export interface BasketItem {
+  ticker: string;
+  status: GiftStatus;
+  usdSent: number;
+  shares: number | null;
+  valueNowUsd: number | null;
+  stock: StockCard | null;
+  claimTx: string | null;
   series: { t: number; usd: number }[];
 }
 

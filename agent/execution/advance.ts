@@ -39,3 +39,21 @@ export function advanceInBackground(db: Db, id: string): void {
     .catch((e) => console.error(`gift ${id}: advance failed: ${(e as Error).message}`))
     .finally(() => running.delete(id));
 }
+
+/** Advances several gifts (a basket's stocks) one after another, so a basket never makes the trading wallet do two things at once. */
+export function advanceManyInBackground(db: Db, ids: string[]): void {
+  void (async () => {
+    for (const id of ids) {
+      if (running.has(id)) continue;
+      running.add(id);
+      try {
+        const r = await advance(db, id);
+        console.log(`gift ${id}: ${r.status}${"reason" in r ? ` (${r.reason})` : ""}`);
+      } catch (e) {
+        console.error(`gift ${id}: advance failed: ${(e as Error).message}`);
+      } finally {
+        running.delete(id);
+      }
+    }
+  })();
+}

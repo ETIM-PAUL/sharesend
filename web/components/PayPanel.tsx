@@ -27,12 +27,14 @@ interface Props {
   open?: (senderAddress: string) => Promise<{ gift: PublicGift; accepts: PaymentRequirement[] }>;
   /** Button text before the amount, default "Pay". */
   payLabel?: string;
+  /** What the sender pays in total, when the opened gift stands for more than its own amount (a basket). */
+  totalUsd?: number;
 }
 
 const isEmbedded = (w: ConnectedWallet) => w.walletClientType.startsWith("privy");
 
 /** Sign in (Privy), open the gift, pick a stablecoin, approve once if needed, sign, pay. */
-export function PayPanel({ ticker, amountUsd, senderName, recipientName, message, returnAs, order, onPaid, onExpired, open, payLabel = "Pay" }: Props) {
+export function PayPanel({ ticker, amountUsd, senderName, recipientName, message, returnAs, order, onPaid, onExpired, open, payLabel = "Pay", totalUsd }: Props) {
   const { ready, authenticated, login } = usePrivy();
   const { wallets, ready: walletsReady } = useWallets();
   const [chosen, setChosen] = useState<string | null>(null);
@@ -230,7 +232,7 @@ export function PayPanel({ ticker, amountUsd, senderName, recipientName, message
 
           {draft?.sufficient && !draft.needsApproval ? (
             <Button onClick={pay} disabled={!!busy || left <= 0}>
-              {payLabel} {usd(gift.gift.usd + gift.gift.fee)} in {sym}
+              {payLabel} {usd(totalUsd ?? gift.gift.usd + gift.gift.fee)} in {sym}
             </Button>
           ) : null}
 

@@ -59,6 +59,8 @@ export interface Gift {
   /** The recipient's one-time thank-you, set once after claiming and never changed. */
   thanksNote: string | null;
   thankedAt: Date | null;
+  /** Set on every gift in a basket (several stocks, one payment, one claim link): the id of the basket's lead gift. */
+  basketId: string | null;
 }
 
 export type ReturnAs = "stock" | "usdt";
@@ -174,8 +176,12 @@ function toGift(r: any): Gift {
     groupRole: r.group_role ?? null,
     thanksNote: r.thanks_note ?? null,
     thankedAt: r.thanked_at ?? null,
+    basketId: r.basket_id ?? null,
   };
 }
+
+/** The gift that carries a basket's payment and whose id is in the claim link. */
+export const isBasketLead = (g: Pick<Gift, "id" | "basketId">) => g.basketId !== null && g.basketId === g.id;
 
 // ---- Create ----
 
@@ -201,6 +207,9 @@ export interface NewGift {
   channel?: GiftChannel;
   /** A contribution to an open group gift. */
   groupId?: string;
+  /** Part of a basket. The lead gift is created first with `id` = `basketId`; the others use the lead's id as `basketId`. */
+  id?: string;
+  basketId?: string;
 }
 
 export interface GiftCaps {
@@ -263,11 +272,11 @@ export async function createGift(db: Db, input: NewGift, caps: GiftCaps): Promis
     const { rows } = await c.query(
       `INSERT INTO gifts (id, status, sender_address, sender_name, recipient_name, message, ticker, issuer,
          token_address, token_decimals, quoted_token_amount, usd_cost, fee_usd, quote_id, claim_code_hash, payment_expires_at, dry_run, payment_requirements, return_as,
-         order_drop_pct, order_baseline, order_trigger, order_deadline, order_text, channel, group_id, group_role)
-       VALUES ($1, 'AWAITING_PAYMENT', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+         order_drop_pct, order_baseline, order_trigger, order_deadline, order_text, channel, group_id, group_role, basket_id)
+       VALUES ($1, 'AWAITING_PAYMENT', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
        RETURNING *`,
       [
-        randomUUID(),
+        input.id ?? randomUUID(),
         getAddress(input.senderAddress),
         senderName,
         recipientName,
@@ -293,6 +302,7 @@ export async function createGift(db: Db, input: NewGift, caps: GiftCaps): Promis
         input.channel === "agent" ? "agent" : "web",
         input.groupId ?? null,
         input.groupId ? "contribution" : null,
+        input.basketId ?? null,
       ],
     );
     const gift = toGift(rows[0]);
@@ -478,6 +488,31 @@ export async function reissueClaimCode(db: Queryable, id: string): Promise<strin
   return r.rowCount ? code : null;
 }
 
+// ---- Baskets ----
+
+/** Every gift in a basket, lead first. */
+export async function basketMembers(db: Queryable, basketId: string): Promise<Gift[]> {
+  const { rows } = await db.query("SELECT * FROM gifts WHERE basket_id = $1 ORDER BY (id = basket_id) DESC, created_at, id", [basketId]);
+  return rows.map(toGift);
+}
+
+/** Stocks that were refunded or are on their way back to the sender no longer count as part of what the recipient gets. */
+export const DROPPED = new Set<GiftStatus>(["FAILED", "REFUNDING", "REFUNDED", "EXPIRED"]);
+
+/** One status for the whole basket, so the claim page can treat it like a single gift. */
+export function basketStatus(members: Gift[]): GiftStatus {
+  const live = members.filter((m) => !DROPPED.has(m.status));
+  if (!live.length) return members[0]!.status;
+  const has = (...s: GiftStatus[]) => live.some((m) => s.includes(m.status));
+  if (live.every((m) => m.status === "CLAIMED")) return "CLAIMED";
+  if (has("CLAIMING") || (has("CLAIMED") && has("READY"))) return "CLAIMING";
+  if (live.every((m) => m.status === "READY")) return "READY";
+  if (has("BUYING")) return "BUYING";
+  if (has("PAID")) return "PAID";
+  if (has("AWAITING_PAYMENT")) return "AWAITING_PAYMENT";
+  return live[0]!.status;
+}
+
 // ---- Claims ----
 
 export type ClaimFailure =
@@ -545,7 +580,9 @@ export async function verifyClaimCode(
   const id = UUID_RE.test(giftId) ? giftId.toLowerCase() : null;
   if (await isRateLimited(db, ipHash, id, limits)) return { ok: false, reason: "RATE_LIMITED" };
   const gift = id && typeof code === "string" && isWellFormedCode(code) ? await getGift(db, id) : null;
-  if (!gift || !codeMatches(code, gift.claimCodeHash)) {
+  // A basket opens with the lead's code and id only (the ones in the link). The other stocks keep their own unused random
+  // codes, so their ids can't be used to claim one stock on its own.
+  if (!gift || !codeMatches(code, gift.claimCodeHash) || (gift.basketId !== null && gift.basketId !== gift.id)) {
     await recordAttempt(db, ipHash, id, false);
     return { ok: false, reason: "INVALID" };
   }
@@ -574,6 +611,43 @@ export async function beginClaim(db: Db, req: ClaimRequest, limits: ClaimRateLim
   }
 }
 
+/**
+ * Claims every stock in a basket for one address, all or none. Stocks that were refunded are left out; if any of the
+ * rest is still being bought, nothing is claimed yet. The payouts then run one gift at a time (see the caller).
+ */
+export async function beginBasketClaim(db: Db, req: ClaimRequest, limits: ClaimRateLimits = DEFAULT_CLAIM_LIMITS): Promise<{ ok: true; gifts: Gift[] } | { ok: false; reason: ClaimFailure }> {
+  const ipHash = hashIp(req.ip);
+  const checked = await verifyClaimCode(db, req.giftId, req.code, req.ip, limits);
+  if (!checked.ok) return { ok: false, reason: checked.reason };
+  const lead = checked.gift;
+  if (!isBasketLead(lead)) return { ok: false, reason: "INVALID" };
+
+  if (!isAddress(req.claimAddress) || req.claimAddress.toLowerCase() === zeroAddress) return { ok: false, reason: "BAD_ADDRESS" };
+  const to = getAddress(req.claimAddress);
+
+  const members = (await basketMembers(db, lead.id)).filter((m) => !DROPPED.has(m.status));
+  const forbidden = [...members.map((m) => m.tokenAddress), ...(req.forbiddenAddresses ?? [])].map((a) => a.toLowerCase());
+  if (forbidden.includes(to.toLowerCase())) return { ok: false, reason: "BAD_ADDRESS" };
+
+  const blocker = members.find((m) => m.status !== "READY");
+  if (!members.length || blocker) return { ok: false, reason: whyNotClaimable(blocker ?? lead, new Date()) };
+
+  try {
+    const claimed = await withTx(db, async (c) => {
+      const out: Gift[] = [];
+      for (const m of members) out.push(await transitionOn(c, m.id, "READY", "CLAIMING", { claimAddress: to, claimAs: "stock" }, { guard: "claim_expires_at > now()" }));
+      return out;
+    });
+    await recordAttempt(db, ipHash, lead.id, true);
+    return { ok: true, gifts: claimed };
+  } catch (e) {
+    if (!(e instanceof StaleStateError)) throw e;
+    const cur = await basketMembers(db, lead.id);
+    const stuck = cur.find((m) => !DROPPED.has(m.status) && m.status !== "READY");
+    return { ok: false, reason: whyNotClaimable(stuck ?? cur[0]!, new Date()) };
+  }
+}
+
 export const MAX_THANKS_CHARS = 280;
 
 /** Trims, strips control characters and checks the length (in characters, so emoji count once). Null if unusable. */
@@ -590,7 +664,9 @@ export function cleanThanks(raw: unknown): string | null {
  */
 export async function leaveThanks(db: Queryable, id: string, note: string): Promise<"SAVED" | "ALREADY_THANKED" | "NOT_CLAIMED"> {
   const r = await db.query(
-    "UPDATE gifts SET thanks_note = $2, thanked_at = now(), updated_at = now() WHERE id = $1 AND status = 'CLAIMED' AND thanks_note IS NULL",
+    `UPDATE gifts SET thanks_note = $2, thanked_at = now(), updated_at = now()
+     WHERE id = $1 AND thanks_note IS NULL
+       AND (status = 'CLAIMED' OR (basket_id = id AND EXISTS (SELECT 1 FROM gifts m WHERE m.basket_id = gifts.id AND m.status = 'CLAIMED')))`,
     [id, note],
   );
   if ((r.rowCount ?? 0) > 0) return "SAVED";

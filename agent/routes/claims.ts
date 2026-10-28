@@ -8,8 +8,8 @@
 import { Hono, type Context } from "hono";
 import { isAddress } from "viem";
 import { getDb } from "../db/pool.js";
-import { beginClaim, cleanThanks, giftsClaimedBy, leaveThanks, MAX_THANKS_CHARS, verifyClaimCode, type ClaimFailure, type Gift } from "../gifts/ledger.js";
-import { advanceInBackground } from "../execution/advance.js";
+import { basketMembers, basketStatus, beginBasketClaim, beginClaim, cleanThanks, DROPPED, giftsClaimedBy, isBasketLead, leaveThanks, MAX_THANKS_CHARS, verifyClaimCode, type ClaimFailure, type Gift } from "../gifts/ledger.js";
+import { advanceInBackground, advanceManyInBackground } from "../execution/advance.js";
 import { sharesOf, stockInfo, valuation, type StockInfo } from "../claims/stock.js";
 import { rawBalances } from "../binance/wallet.js";
 import { walletBalances } from "../wallet/balances.js";
@@ -62,6 +62,72 @@ function stockCard(info: StockInfo | null) {
   };
 }
 
+/**
+ * The claim page's data for a basket: the same shape as a single gift (so the page's claim steps work unchanged), with
+ * one status for the whole basket, the totals, and one card per stock. A stock that was refunded to the sender is left out.
+ */
+async function basketView(db: NonNullable<ReturnType<typeof db503>>, lead: Gift) {
+  const all = await basketMembers(db, lead.id);
+  const live = all.filter((m) => !DROPPED.has(m.status));
+  const status = basketStatus(all);
+  // A payout interrupted mid-way resumes when anyone looks at the basket, as for a single gift.
+  const stuck = live.filter((m) => m.status === "CLAIMING" && Date.now() - m.updatedAt.getTime() > STUCK_CLAIM_MS);
+  if (stuck.length) advanceManyInBackground(db, stuck.map((m) => m.id));
+
+  const items = await Promise.all(
+    live.map(async (m) => {
+      const info = await stockInfo(m.tokenAddress).catch(() => null);
+      const shares = giftShares(m, info);
+      const v = info && shares ? await valuation(info, shares, (m.readyAt ?? m.createdAt).getTime()).catch(() => null) : null;
+      return {
+        ticker: m.ticker,
+        status: m.status,
+        usdSent: m.usdCost,
+        shares,
+        valueNowUsd: v?.valueNowUsd ?? (info && shares ? Math.round(shares * info.referencePrice * 100) / 100 : null),
+        stock: stockCard(info),
+        claimTx: m.claimTx && /^0x[0-9a-fA-F]{64}$/.test(m.claimTx) ? m.claimTx : null,
+        series: v?.series ?? [],
+      };
+    }),
+  );
+  const sum = (f: (i: (typeof items)[number]) => number | null) => (items.some((i) => f(i) === null) ? null : Math.round(items.reduce((s, i) => s + (f(i) ?? 0), 0) * 100) / 100);
+  const claimed = status === "CLAIMING" || status === "CLAIMED";
+  const claimedMember = live.find((m) => m.claimAddress);
+  const ready = live.filter((m) => m.status === "READY");
+  return {
+    ok: true,
+    gift: {
+      id: lead.id,
+      status,
+      senderName: lead.senderName,
+      recipientName: lead.recipientName,
+      message: lead.message,
+      ticker: "BASKET",
+      usdSent: Math.round(live.reduce((s, m) => s + m.usdCost, 0) * 100) / 100,
+      shares: null,
+      valueNowUsd: sum((i) => i.valueNowUsd),
+      priceSource: "reference" as const,
+      sentAt: lead.createdAt,
+      claimExpiresAt: lead.claimExpiresAt,
+      expired: status === "READY" && ready.some((m) => !!m.claimExpiresAt && m.claimExpiresAt.getTime() <= Date.now()),
+      claimError: status === "READY" ? (live.find((m) => m.failureReason)?.failureReason ?? null) : null,
+      claimAddress: claimed ? (claimedMember?.claimAddress ?? null) : null,
+      claimTx: null,
+      claimAs: claimed ? ("stock" as const) : null,
+      cashedOutUsdt: null,
+      payoutNote: null,
+      contributors: [],
+      thanks: lead.thanksNote ? { note: lead.thanksNote, at: lead.thankedAt } : null,
+      channel: lead.channel,
+      dryRun: lead.dryRun,
+    },
+    stock: null,
+    series: [],
+    basket: { items, droppedCount: all.length - live.length },
+  };
+}
+
 claims.post("/claims/:id/view", async (c) => {
   const db = db503();
   if (!db) return c.json({ ok: false, error: "database not configured" }, 503);
@@ -76,6 +142,8 @@ claims.post("/claims/:id/view", async (c) => {
   // A payout interrupted mid-way (e.g. a restart) resumes when anyone looks at the gift. Vault transfers are
   // recorded before broadcast, so this can only finish the same transfer, never send a second one.
   if (g.status === "CLAIMING" && Date.now() - g.updatedAt.getTime() > STUCK_CLAIM_MS) advanceInBackground(db, g.id);
+
+  if (isBasketLead(g)) return c.json(await basketView(db, g));
 
   const info = await stockInfo(g.tokenAddress).catch(() => null);
   const shares = giftShares(g, info);
@@ -128,6 +196,18 @@ claims.post("/claims/:id", async (c) => {
   if (body?.confirmEligible !== true) return c.json({ ok: false, error: "Confirm you're allowed to hold this stock where you live." }, 400);
   if (typeof body.address !== "string" || !isAddress(body.address)) return c.json({ ok: false, reason: "BAD_ADDRESS", error: CLAIM_ERRORS.BAD_ADDRESS.message }, 400);
   const id = c.req.param("id");
+  const forbiddenAddresses = [process.env.VAULT_ADDRESS, process.env.AGENTIC_WALLET_ADDRESS].filter((a): a is string => !!a);
+  const lead = await db.query<{ basket_id: string | null }>("SELECT basket_id FROM gifts WHERE id = $1", [id]).then((q) => q.rows[0]).catch(() => undefined);
+  if (lead?.basket_id === id) {
+    // A basket: every stock goes to the same address in one step (shares only; no cash-out for baskets).
+    const b = await beginBasketClaim(db, { giftId: id, code: typeof body.code === "string" ? body.code : "", claimAddress: body.address, claimAs: "stock", ip: clientIp(c), forbiddenAddresses });
+    if (!b.ok) {
+      const e = CLAIM_ERRORS[b.reason];
+      return c.json({ ok: false, reason: b.reason, error: e.message }, e.status);
+    }
+    advanceManyInBackground(db, b.gifts.map((g) => g.id));
+    return c.json({ ok: true, status: "CLAIMING" }, 202);
+  }
   const r = await beginClaim(db, {
     giftId: id,
     code: typeof body.code === "string" ? body.code : "",
@@ -135,7 +215,7 @@ claims.post("/claims/:id", async (c) => {
     claimAs: body.claimAs === "usdt" ? "usdt" : "stock",
     ip: clientIp(c),
     // The gift can't be "claimed" back into ShareSend's own wallets.
-    forbiddenAddresses: [process.env.VAULT_ADDRESS, process.env.AGENTIC_WALLET_ADDRESS].filter((a): a is string => !!a),
+    forbiddenAddresses,
   });
   if (!r.ok) {
     const e = CLAIM_ERRORS[r.reason];

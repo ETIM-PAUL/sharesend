@@ -69,6 +69,7 @@ ShareSend turns a share into something you can send like a message.
 
 - **One-signature payment** in USDT, USDC, United Stables (U) or USD1, through Binance's B402.
 - **Best issuer, automatically.** Compares bStocks and Ondo and picks the cheaper price per share, with a warning when the US market is closed.
+- **Gift a basket.** Put 2 to 5 stocks in one gift (say $10 split evenly across Nvidia, Apple and Tesla, up to $20 in total). One signature pays for all of them and the recipient claims them together from one link. Each stock is bought, returned and refunded on its own, so one that can't be bought is refunded without holding up the others. The $0.10 fee applies to each stock.
 - **Group gifts.** Start a pot for a graduation or a birthday and share the link. Friends each chip in what they like and add a note. At the closing time the agent buys one gift with everything raised; if it's cancelled or can't be bought, everyone is refunded to their own wallet.
 - **Tell the agent.** Describe the gift in plain English and a chat assistant fills in the form. The sender still checks it and pays.
 - **Wait for a better price.** "Only if it drops 2% by Friday": paid up front, bought only if the price gets there, refunded in full if it doesn't.
@@ -81,7 +82,9 @@ ShareSend turns a share into something you can send like a message.
 - **Claim with an email**, on a phone, in under a minute. The vault pays the gas.
 - **See what you own:** the company profile, the issuer's backing report, and the value now against the value when it was sent.
 - **A group gift arrives with a note from everyone** who chipped in.
-- **Cash if they need it.** The gift arrives as shares; a recipient who needs money can take its value in USDT instead when claiming.
+- **A basket arrives as one link**, with a card for each stock, and is claimed in one step to one wallet.
+- **Say thank you, once.** After claiming, the recipient can send one short note (up to 280 characters) to the sender, or to everyone who chipped in on a group gift. It can't be edited or followed by a second one. The sender sees it on the gift's page and in "Gifts you sent".
+- **Cash if they need it.** The gift arrives as shares; a recipient who needs money can take its value in USDT instead when claiming (single-stock gifts; a basket is claimed as shares).
 
 
 
@@ -125,6 +128,10 @@ flowchart LR
 
 
 
+
+### Baskets
+
+A basket is several ordinary gifts, one per stock, that share one payment and one claim link. The first stock's gift carries the payment for the whole total; when it settles, every stock in the basket becomes paid in the same database transaction. After that each one is bought, returned or refunded on its own, so a stock that can't be bought is refunded to the sender and left out of what the recipient claims. The recipient claims every remaining stock to one address in one atomic step, and only the first stock's id and code open the basket.
 
 ### Why two wallets
 
@@ -191,7 +198,7 @@ Not used: the DeFi API, and Agent Studio's managed runtime. The runtime has no s
 - **No double charges or double sends.** B402 settlement is idempotent on the signed payload, and each execution step has a record that turns a retry into a no-op.
 - **Private claim codes.** 128-bit random, stored only as a SHA-256 hash, and kept in the link's `#` fragment, so they never reach a server log. Failed attempts are rate-limited per IP and per gift.
 - **One claim only.** `READY → CLAIMING` is atomic: of any number of simultaneous claims, exactly one wins.
-- **Caps in code.** $20 a gift and $50 a day, enforced by the server, on top of the Agentic Wallet's own limits.
+- **Caps in code.** $20 a gift (or $20 in total for a basket) and $50 a day, enforced by the server, on top of the Agentic Wallet's own limits.
 - **Proof of holdings, in public.** Holdings are checked against what's owed every 15 minutes and shown on `[/agent](https://sharesend-production.up.railway.app/agent)`; a shortfall raises an alert.
 - **Resilient sessions.** Agentic Wallet sessions last 48 hours. A keepalive job watches the session and warns before it ends; while signed out, new gifts wait as "queued" and everything else keeps working.
 - **Honest about custody.** The MVP holds unclaimed gifts in a custodial vault. The issuers keep their own powers to pause or restrict tokens ([details](docs/issuers.md)). A non-custodial escrow is first on the roadmap.
@@ -241,4 +248,6 @@ Real $1 gifts of Nvidia (bStocks NVDAB), end to end on BSC mainnet. Every link i
 | Hosting       | Railway: agent in Singapore (`asia-southeast1`, outside the regions Binance's APIs refuse), web app, Postgres |
 | Tests         | Vitest; database tests run against a real Postgres                                                            |
 
+## Roadmap
 
+- **Non-custodial escrow**, replacing the custodial vault that holds unclaimed gifts today (see "Honest about custody" above).

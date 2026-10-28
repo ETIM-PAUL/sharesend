@@ -20,8 +20,9 @@ export function useGift(id: string, initial?: PublicGift) {
         setGift(g);
         setError(null);
         // A claimed gift keeps being checked, slowly, until the recipient's thank-you arrives.
-        if (TERMINAL.has(g.status) && !(g.status === "CLAIMED" && !g.thanks)) return;
-        if (g.status === "CLAIMED") {
+        const overall = g.basket?.status ?? g.status;
+        if (TERMINAL.has(overall) && !(overall === "CLAIMED" && !g.thanks)) return;
+        if (overall === "CLAIMED") {
           timer = setTimeout(tick, 30_000);
           return;
         }
